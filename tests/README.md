@@ -18,3 +18,8 @@ numbering and wheel buttons; on Windows, DPI awareness, cloaked windows, the
 `fakes.py` describes one imaginary desktop three times -- as Quartz reports it,
 as X11 does, and as `EnumWindows` does -- so all three backends can be held to
 the same crop, the same label and the same coordinates.
+
+The suite also holds every backend to `backend.Backend`, a `typing.Protocol`:
+`isinstance` catches a missing method and `check_interface()` compares parameter
+names, so a signature drifting on one platform fails here rather than three
+steps into a live run on the machine you cannot test.

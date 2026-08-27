@@ -372,6 +372,22 @@ ck(CLIP2["v"] == "before", "the clipboard is put back afterwards")
 fakes.STATE["pos"] = (300.0, 300.0)
 ck(d.run("cursor_position", {})[0]["text"] == "[100, 200]", "cursor_position is window space here too")
 
+print("\n== backend interface ==")
+import backend as bemod
+for label, cls in (("macOS", mac.Backend), ("X11", x11.Backend), ("Windows", win32.Backend)):
+    fakes.reset()
+    inst = cls()
+    ck(isinstance(inst, bemod.Backend), f"{label} satisfies the Backend protocol")
+    ck(bemod.check_interface(inst) == [],
+       f"{label} signatures match: {bemod.check_interface(inst)}")
+
+class Drifted(win32.Backend):
+    def capture(self, display_index):            # a parameter quietly dropped
+        raise NotImplementedError
+fakes.reset()
+ck(any("capture" in p for p in bemod.check_interface(Drifted())),
+   "and a signature that drifts on one platform is caught here, not at run time")
+
 print("\n== windows backend ==")
 fakes.reset()
 WB = win32.Backend()

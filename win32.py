@@ -21,6 +21,13 @@ Four things differ from the other two backends:
   resize border, so a window measured that way is a few pixels bigger than what
   you see. `DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS)` is the true
   visible rectangle, and that is what the crop needs.
+
+Every function is declared in `_declare()` before it is called. This is not
+tidiness: an undeclared ctypes function returns `c_int`, so on 64-bit Windows
+`GetForegroundWindow`, `OpenProcess` and `GlobalLock` would each hand back a
+handle or pointer with its top 32 bits cut off. A truncated `GlobalLock` means
+`memmove` into an address that is not ours. Declaring the signatures turns a
+class of silent corruption into an argument error at the call.
 """
 
 from __future__ import annotations
@@ -180,10 +187,61 @@ class Backend:
             raise RuntimeError("the Windows backend needs Windows")
         self.user32 = _dll("user32")
         self.kernel32 = _dll("kernel32")
+        try:
+            self.dwmapi = _dll("dwmapi")
+        except Exception:                    # noqa: BLE001 -- pre-Vista, or stubbed
+            self.dwmapi = None
+        self._declare()
         self.dpi = _claim_dpi()
         self.warning = "" if self.dpi else (
             "could not claim DPI awareness; on a display scaled above 100% every "
             "coordinate will be wrong")
+
+    def _declare(self) -> None:
+        """Give ctypes every signature up front, rather than let it guess.
+
+        The returns are what matter: the default is `c_int`, which silently
+        truncates every 64-bit handle and pointer below.
+        """
+        u, k = self.user32, self.kernel32
+        LPRECT, LPPOINT = ctypes.POINTER(RECT), ctypes.POINTER(POINT)
+        LPDWORD, LPMONITORINFO = ctypes.POINTER(DWORD), ctypes.POINTER(MONITORINFO)
+        for fn, restype, argtypes in (
+            (u.GetSystemMetrics, ctypes.c_int, (ctypes.c_int,)),
+            (u.GetCursorPos, ctypes.c_bool, (LPPOINT,)),
+            (u.SendInput, ctypes.c_uint, (ctypes.c_uint, ctypes.POINTER(INPUT), ctypes.c_int)),
+            (u.EnumWindows, ctypes.c_bool, (ENUMWINDOWSPROC, ctypes.c_void_p)),
+            (u.EnumDisplayMonitors, ctypes.c_bool,
+             (HANDLE, ctypes.c_void_p, MONITORENUMPROC, ctypes.c_void_p)),
+            (u.GetMonitorInfoW, ctypes.c_bool, (HANDLE, LPMONITORINFO)),
+            (u.IsWindowVisible, ctypes.c_bool, (HWND,)),
+            (u.GetForegroundWindow, HWND, ()),                 # a handle, not an int
+            (u.GetWindowLongW, ctypes.c_long, (HWND, ctypes.c_int)),
+            (u.GetWindowThreadProcessId, DWORD, (HWND, LPDWORD)),
+            (u.GetWindowRect, ctypes.c_bool, (HWND, LPRECT)),
+            (u.GetWindowTextLengthW, ctypes.c_int, (HWND,)),
+            (u.GetWindowTextW, ctypes.c_int, (HWND, ctypes.c_wchar_p, ctypes.c_int)),
+            (u.GetClassNameW, ctypes.c_int, (HWND, ctypes.c_wchar_p, ctypes.c_int)),
+            (u.OpenClipboard, ctypes.c_bool, (HWND,)),
+            (u.CloseClipboard, ctypes.c_bool, ()),
+            (u.EmptyClipboard, ctypes.c_bool, ()),
+            (u.GetClipboardData, HANDLE, (ctypes.c_uint,)),    # a handle, not an int
+            (u.SetClipboardData, HANDLE, (ctypes.c_uint, HANDLE)),
+            (k.GlobalAlloc, HANDLE, (ctypes.c_uint, ctypes.c_size_t)),
+            (k.GlobalLock, ctypes.c_void_p, (HANDLE,)),        # a pointer we memmove to
+            (k.GlobalUnlock, ctypes.c_bool, (HANDLE,)),
+            (k.OpenProcess, HANDLE, (DWORD, ctypes.c_bool, DWORD)),
+            (k.CloseHandle, ctypes.c_bool, (HANDLE,)),
+            (k.QueryFullProcessImageNameW, ctypes.c_bool,
+             (HANDLE, DWORD, ctypes.c_wchar_p, LPDWORD)),
+        ):
+            fn.restype = restype
+            fn.argtypes = list(argtypes)
+        if self.dwmapi is not None:
+            # HRESULT, and a void* the caller sizes itself
+            self.dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
+            self.dwmapi.DwmGetWindowAttribute.argtypes = [
+                HWND, DWORD, ctypes.c_void_p, DWORD]
 
     # ---------------- pointer ----------------
 
@@ -318,11 +376,13 @@ class Backend:
         frame bounds is the real one.
         """
         r = RECT()
-        try:
-            ok = _dll("dwmapi").DwmGetWindowAttribute(
-                hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, byref(r), sizeof(RECT)) == 0
-        except Exception:                              # noqa: BLE001
-            ok = False
+        ok = False
+        if self.dwmapi is not None:
+            try:
+                ok = self.dwmapi.DwmGetWindowAttribute(
+                    hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, byref(r), sizeof(RECT)) == 0
+            except Exception:                          # noqa: BLE001
+                ok = False
         if not ok and not self.user32.GetWindowRect(hwnd, byref(r)):
             return None
         w, h = r.right - r.left, r.bottom - r.top
@@ -331,9 +391,11 @@ class Backend:
         return Rect(float(r.left), float(r.top), float(w), float(h))
 
     def _cloaked(self, hwnd) -> bool:
+        if self.dwmapi is None:
+            return False
         value = DWORD(0)
         try:
-            if _dll("dwmapi").DwmGetWindowAttribute(
+            if self.dwmapi.DwmGetWindowAttribute(
                     hwnd, DWMWA_CLOAKED, byref(value), sizeof(DWORD)) == 0:
                 return bool(value.value)
         except Exception:                              # noqa: BLE001

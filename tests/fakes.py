@@ -431,8 +431,23 @@ class _Dwmapi:
             return 0
         return 1
 
+class _Fn:
+    """A stub dll entry point that accepts .restype/.argtypes like the real one,
+    so win32.Backend._declare() can be exercised rather than skipped."""
+    def __init__(self, fn):
+        self._fn, self.restype, self.argtypes = fn, None, None
+    def __call__(self, *a, **k):
+        return self._fn(*a, **k)
+
+def _settable(obj):
+    for name in dir(obj):
+        if not name.startswith("_"):
+            setattr(obj, name, _Fn(getattr(obj, name)))
+    return obj
+
 class _WinDLL:
-    user32, kernel32, shcore, dwmapi = _User32(), _Kernel32(), _Shcore(), _Dwmapi()
+    user32, kernel32 = _settable(_User32()), _settable(_Kernel32())
+    shcore, dwmapi = _settable(_Shcore()), _settable(_Dwmapi())
 
 _ct.windll = _WinDLL()
 

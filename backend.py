@@ -27,8 +27,70 @@ A backend supplies:
 
 from __future__ import annotations
 
+import inspect
 import os
 import sys
+from typing import Protocol, runtime_checkable
+
+from PIL import Image
+
+from window import Rect, WindowInfo
+
+
+@runtime_checkable
+class Backend(Protocol):
+    """What `desktop.py` is allowed to assume about a machine.
+
+    Python has no compile step, so this is checked two ways instead: any
+    backend must satisfy `isinstance(be, Backend)` -- which catches a missing
+    method -- and `check_interface()` compares parameter names, which catches
+    the subtler case of a signature drifting on one platform only. The test
+    suite runs both against all three backends, so interface drift fails there
+    rather than three steps into a live run on the one machine you cannot test.
+    """
+
+    name: str
+    os_label: str
+    keymap: dict
+    paste_combo: tuple
+    platform_notes: str
+    warning: str
+
+    def screen_size(self) -> tuple[int, int]: ...
+    def cursor_position(self) -> tuple[float, float]: ...
+    def move(self, x: float, y: float, drag_button: str | None = None) -> None: ...
+    def press(self, button: str, x: float, y: float, click_state: int = 1) -> None: ...
+    def release(self, button: str, x: float, y: float, click_state: int = 1) -> None: ...
+    def scroll(self, vertical: int, horizontal: int) -> None: ...
+    def capture(self, display_index: int, region: Rect) -> tuple[Image.Image, Rect]: ...
+    def display_rect(self, index: int = 1) -> Rect: ...
+    def list_windows(self) -> list[WindowInfo]: ...
+    def frontmost_pid(self) -> int | None: ...
+    def clip_read(self) -> str | None: ...
+    def clip_write(self, text: str) -> None: ...
+
+
+def check_interface(be) -> list[str]:
+    """Every way `be` fails to be a Backend. Empty means it conforms."""
+    problems = []
+    for field in ("name", "os_label", "keymap", "paste_combo", "platform_notes",
+                  "warning"):
+        if not hasattr(be, field):
+            problems.append(f"missing attribute {field!r}")
+    for name, spec in vars(Backend).items():
+        if name.startswith("_") or not callable(spec):
+            continue
+        got = getattr(be, name, None)
+        if got is None:
+            problems.append(f"missing method {name}()")
+            continue
+        want_params = list(inspect.signature(spec).parameters)[1:]     # drop self
+        got_params = list(inspect.signature(got).parameters)
+        if want_params != got_params:
+            problems.append(
+                f"{name}({', '.join(got_params)}) should be "
+                f"{name}({', '.join(want_params)})")
+    return problems
 
 
 class ActionError(Exception):
