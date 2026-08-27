@@ -366,3 +366,94 @@ class Runner:
                 self.execute(step, point)
                 time.sleep(mo.settle(self.desk.motion, self.desk.rng))
         return total
+
+
+# --------------------------------------------------------------------------
+# compiling one, from a live agent run
+# --------------------------------------------------------------------------
+
+# What Claude's member actions become in a program. Anything absent is not
+# replayable and is skipped: a screenshot is how the model looks around, and a
+# program does not need to look around.
+RECORDABLE = {
+    "left_click": "click", "right_click": "right_click",
+    "middle_click": "middle_click", "double_click": "double_click",
+    "triple_click": "triple_click", "mouse_move": "move",
+    "left_click_drag": "drag", "scroll": "scroll",
+    "type": "type", "key": "key", "wait": "wait", "hold_key": "hold_key",
+}
+
+
+def anchor_for(backend, display: Rect, point, app_hint: str = "") -> Anchor | None:
+    """Anchor `point` to whichever window it landed in.
+
+    The window list is front to back, so the first one containing the point is
+    the one on top -- the one the user would say was clicked.
+    """
+    for w in backend.list_windows():
+        if not w.usable:
+            continue
+        r = w.rect
+        if r.x <= point[0] < r.right and r.y <= point[1] < r.bottom:
+            if app_hint and app_hint.lower() not in w.app.lower():
+                continue
+            return Anchor.of(point, r, w.app, w.title)
+    return None
+
+
+class Recorder:
+    """Turns a live agent run into a Program.
+
+    `observe()` is called just before each action is executed, because the
+    fingerprint has to be of the screen the model decided against, not of
+    whatever the screen looks like afterwards.
+    """
+
+    def __init__(self, desk, task: str = "", log=print) -> None:
+        self.desk, self.log = desk, log
+        self.program = Program(task=task)
+        self.skipped: list[str] = []
+
+    def observe(self, name: str, args: dict) -> None:
+        action = RECORDABLE.get(name)
+        if action is None:
+            self.skipped.append(name)
+            return
+        args = dict(args or {})
+        anchor = fp = None
+        if args.get("coordinate"):
+            point = self.desk.to_logical(args["coordinate"])
+            anchor = anchor_for(self.desk.backend, self.desk.display_rect(), point)
+            if anchor is None:
+                self.log(f"      not recorded: {name} landed outside every window")
+                return
+            region = Rect(point[0] - PATCH / 2, point[1] - PATCH / 2, PATCH, PATCH)
+            try:
+                patch, _ = self.desk.backend.capture(self.desk.display, region)
+                fp = fingerprint(patch)
+                if contrast(patch) < FLAT:
+                    self.log("      recorded on nearly blank pixels; that step will "
+                             "verify almost nothing")
+            except Exception:                          # noqa: BLE001
+                fp = None
+        step = Step(action=action, anchor=anchor, fingerprint=fp,
+                    args={k: v for k, v in args.items()
+                          if k not in ("coordinate", "start_coordinate")})
+        if action == "drag":
+            start = self.desk.to_logical(args["start_coordinate"])
+            step.anchor = anchor_for(self.desk.backend, self.desk.display_rect(), start)
+            step.args["to"] = anchor
+            if step.anchor is None:
+                self.log("      not recorded: drag started outside every window")
+                return
+        if step.args.get("text") and action in POINT_ACTIONS:
+            step.args["modifiers"] = step.args.pop("text")   # clicks carry modifiers
+        self.program.steps.append(step)
+
+    def save(self, path) -> None:
+        if not self.program.steps:
+            self.log(f"nothing recordable happened; {path} not written")
+            return
+        self.program.save(path)
+        note = f" ({len(set(self.skipped))} kind(s) of step skipped)" if self.skipped else ""
+        self.log(f"recorded {len(self.program.steps)} step(s) to {path}{note}")

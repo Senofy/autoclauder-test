@@ -47,7 +47,13 @@ pyautogui.FAILSAFE = False          # we run our own, see _guard() below
 pyautogui.PAUSE = 0.0
 pyautogui.DARWIN_CATCH_UP_TIME = 0.004   # keyboard only now; the pointer is ours
 
-MAX_EDGE = 2576      # model image limit (Sonnet 5, Opus 4.7+); the API will NOT downscale for you
+# Two separate limits, and a picture can pass one while failing the other. A
+# 2576x1776 shot is inside the edge limit and still 6100 image tokens, which the
+# API rejects outright -- it will NOT downscale for you.
+MAX_EDGE = 2576          # longest side, in model pixels
+MAX_IMAGE_TOKENS = 4784  # and the whole picture must fit in this many tokens
+PIXELS_PER_TOKEN = 750
+MAX_PIXELS = MAX_IMAGE_TOKENS * PIXELS_PER_TOKEN   # ~3.59 megapixels
 SCROLL_UNIT = 2      # wheel notches per unit Claude asks for
 CORNER_MARGIN = 4    # px from a corner that counts as "slammed"
 
@@ -211,11 +217,16 @@ class Desktop:
         return found
 
     def _fit(self, img: Image.Image) -> Image.Image:
-        long_edge = max(img.size)
-        if long_edge <= MAX_EDGE:
+        """Shrink until the picture satisfies both limits, or leave it alone."""
+        w, h = img.size
+        k = min(MAX_EDGE / max(w, h), math.sqrt(MAX_PIXELS / (w * h)))
+        if k >= 1.0:
             return img
-        k = MAX_EDGE / long_edge
-        return img.resize((round(img.size[0] * k), round(img.size[1] * k)), Image.LANCZOS)
+        # Floor rather than round: rounding a scale factor derived from an area
+        # can land a pixel or two over the ceiling, and the API does not round
+        # in your favour.
+        return img.resize((max(1, math.floor(w * k)), max(1, math.floor(h * k))),
+                          Image.LANCZOS)
 
     @staticmethod
     def _encode(img: Image.Image) -> str:

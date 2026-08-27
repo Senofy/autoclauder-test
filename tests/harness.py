@@ -221,6 +221,21 @@ os.environ["CLAUDE_DISPLAY"] = "nonsense"
 ck(newdesk().display == 1, "and a junk value falls back to 1 rather than crashing")
 os.environ.pop("CLAUDE_DISPLAY")
 
+print("\n== image limits ==")
+import math as _math
+_fit = Desktop._fit
+class _JustFit:                      # only _fit is needed, not a whole Desktop
+    _fit = _fit
+for _w, _h in ((2690, 1855), (7680, 2160), (2576, 1776), (3000, 3000), (5000, 300)):
+    _out = _JustFit()._fit(Image.new("RGB", (_w, _h))).size
+    _tok = _out[0] * _out[1] / desktop.PIXELS_PER_TOKEN
+    ck(max(_out) <= desktop.MAX_EDGE and _tok <= desktop.MAX_IMAGE_TOKENS,
+       f"{_w}x{_h} fits both limits as {_out[0]}x{_out[1]} ({_tok:.0f} tokens)")
+ck(_JustFit()._fit(Image.new("RGB", (960, 700))).size == (960, 700),
+   "and a picture already inside both is left alone")
+ck(_JustFit()._fit(Image.new("RGB", (2576, 1776))).size != (2576, 1776),
+   "a shot inside the edge limit but over the token limit is still shrunk")
+
 print("\n== capture scope ==")
 MAC = mac.Backend()
 D = MAC.display_rect(1)
@@ -285,8 +300,13 @@ ck(shot.getpixel((0, 0)) == RED and shot.getpixel((1919, 1399)) == GREEN,
    "the cropped pixels are the window's, corner to corner")
 
 full = newdesk()
-ck(full._frame.origin == (0.0, 0.0) and abs(full._frame.scale - 1728 / 2576) < 1e-9,
-   "full-screen mode is unchanged: origin (0,0), whole-display scale")
+ck(full._frame.origin == (0.0, 0.0), "full-screen mode still starts at the origin")
+ck(abs(full._frame.scale - 1728 / full._frame.width) < 1e-9,
+   "and its scale still maps the whole display across the image")
+ck(full._frame.width * full._frame.height / desktop.PIXELS_PER_TOKEN
+   <= desktop.MAX_IMAGE_TOKENS,
+   f"a full-screen Retina shot is shrunk to fit the token limit "
+   f"({full._frame.width}x{full._frame.height})")
 ck([b["type"] for b in full.run("screenshot", {})] == ["image"],
    "full-screen result is still a bare image block")
 
@@ -601,6 +621,57 @@ try:
     ck(False, "a program naming an app that is not open stops")
 except ReplayMiss as exc:
     ck("Xcode" in str(exc), f"a program naming an app that is not open stops: {exc}")
+
+print("\n== recording a run ==")
+from program import Recorder, anchor_for
+
+d = newdesk(window=WindowTarget())
+a = anchor_for(d.backend, d.display_rect(), (300.0, 300.0))
+ck(a is not None and a.app == "Notes", f"a point is anchored to the window it landed in ({a})")
+ck(anchor_for(d.backend, d.display_rect(), (1700.0, 1100.0)) is None,
+   "a point on bare desktop anchors to nothing")
+
+d = newdesk(window=WindowTarget())
+rec = Recorder(d, task="send a message", log=lambda *x: None)
+for name, args in (("screenshot", {}),
+                   ("left_click", {"coordinate": [100, 200]}),
+                   ("type", {"text": "aaaa"}),
+                   ("key", {"text": "Return"}),
+                   ("zoom", {"region": [0, 0, 10, 10]}),
+                   ("cursor_position", {})):
+    rec.observe(name, args)
+steps = rec.program.steps
+ck([s.action for s in steps] == ["click", "type", "key"],
+   f"screenshots, zooms and cursor reads are not replayable steps ({[s.action for s in steps]})")
+ck(steps[0].anchor.app == "Notes" and steps[0].fingerprint,
+   "the click is anchored to its window and fingerprinted")
+ck(steps[0].anchor.point(Rect(200.0, 100.0, 900.0, 700.0)) == d.to_logical([100, 200]),
+   "and the anchor resolves back to the exact point Claude clicked")
+ck(steps[1].args == {"text": "aaaa"}, "the typed text is kept verbatim")
+ck(set(rec.skipped) == {"screenshot", "zoom", "cursor_position"}, "and the rest is noted")
+
+out = pathlib.Path(tempfile.mkdtemp()) / "rec.json"
+rec.save(out)
+back = Program.load(out)
+ck(len(back.steps) == 3 and back.task == "send a message",
+   "a recorded program saves and loads")
+d2 = newdesk(window=WindowTarget())
+ck(Runner(d2, back, log=lambda *x: None).run() == 3,
+   "and replays against the same desktop without a miss")
+ck(len(kinds("kCGEventLeftMouseDown")) == 1, "clicking once, where it was recorded")
+
+d = newdesk(window=WindowTarget())
+rec = Recorder(d, log=lambda *x: None)
+rec.observe("left_click", {"coordinate": [100, 200], "text": "shift"})
+ck(rec.program.steps[0].args.get("modifiers") == "shift",
+   "a modifier on a click is recorded as a modifier, not as text to type")
+
+d = newdesk(window=WindowTarget())
+rec = Recorder(d, log=lambda *x: None)
+rec.observe("left_click_drag", {"start_coordinate": [10, 10], "coordinate": [400, 300]})
+drag = rec.program.steps[0]
+ck(drag.action == "drag" and drag.anchor is not None and isinstance(drag.args["to"], Anchor),
+   "a drag records both ends")
 
 # ===========================================================================
 print("\n== agent loop ==")

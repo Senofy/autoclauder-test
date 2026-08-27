@@ -32,6 +32,7 @@ ENV_FILE, ENV_COUNT = env.load()
 
 from desktop import Desktop, FailSafeAbort
 from motion import MotionProfile
+from program import Recorder
 from window import WindowTarget
 
 TOOLSET = "computer"
@@ -119,6 +120,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="env file to read instead of ./.env (already applied by "
                          "the time flags are parsed)")
     ap.add_argument("--no-zoom", action="store_true")
+    ap.add_argument("--record", metavar="PATH",
+                    help="write what Claude does to a replayable program, so the "
+                         "same task can be run again with replay.py and no API calls")
 
     c = ap.add_argument_group("what gets captured")
     c.add_argument("--full-screen", action="store_true",
@@ -188,6 +192,7 @@ def main() -> int:
     if ENV_FILE is not None:
         record("env", {"file": str(ENV_FILE), "set": ENV_COUNT})
         print(f"env: {ENV_FILE} ({ENV_COUNT} set)")
+    recorder = Recorder(desk, task=" ".join(args.task)) if args.record else None
     record("task", " ".join(args.task))
     record("motion", vars(profile) if hasattr(profile, "__dict__") else str(profile))
     print(f"\033[1mtask:\033[0m {' '.join(args.task)}")
@@ -225,6 +230,8 @@ def main() -> int:
                     record("text", b.text)
 
             if resp.stop_reason != "tool_use":
+                if recorder is not None:
+                    recorder.save(args.record)
                 record("finish", {"reason": resp.stop_reason, "steps": step})
                 print(f"\n\033[32m=== finished after {step} step(s) "
                       f"(stop_reason={resp.stop_reason}) ===\033[0m")
@@ -247,6 +254,10 @@ def main() -> int:
                 record("action", {"name": b.name, "input": action_args})
 
                 try:
+                    if recorder is not None:
+                        # Before the action: the fingerprint has to be of the
+                        # screen Claude decided against.
+                        recorder.observe(b.name, action_args)
                     content = desk.run(b.name, action_args)
                     if b.name == "screenshot" and desk.window is not None:
                         print(f"       \033[90m{desk.view}\033[0m")
@@ -267,6 +278,8 @@ def main() -> int:
             messages.append({"role": "user", "content": results})
             prune_images(messages, args.keep_images)
 
+        if recorder is not None:
+            recorder.save(args.record)
         record("finish", {"reason": "max_steps", "steps": args.max_steps})
         print(f"\n\033[31m=== hit --max-steps ({args.max_steps}), stopping ===\033[0m")
         return 1
