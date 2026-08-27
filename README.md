@@ -474,8 +474,12 @@ each window back to that size before the step runs, so a window you have since
 made smaller stops being a problem at all. Resizing another application's window
 is the one thing the backends could not previously do: `SetWindowPos` on
 Windows (corrected for the invisible border, which `SetWindowPos` counts and the
-DWM frame does not), `configure` on X11, and System Events via `osascript` on
-macOS, which needs Automation permission on top of Accessibility. A window that
+DWM frame does not); a `ConfigureRequest` to the *client* on X11 (the frame
+belongs to the window manager, and asking the client is the path a reparenting
+WM honours -- less the decorations, or you get a window a title bar too tall);
+and System Events via `osascript` on macOS, which needs Automation permission on
+top of Accessibility. On X11 it is a request, not a command, so the frame is
+read back afterwards rather than assumed -- a tiling WM will simply ignore it. A window that
 refuses -- a fixed-size dialog, anything full-screen -- is a warning, not a
 failure, and the run goes on with the anchor as it stands.
 
@@ -594,7 +598,7 @@ are the supported path.
 cd tests && python3 harness.py
 ```
 
-220 assertions, no API key and no attached display required — on any of the
+226 assertions, no API key and no attached display required — on any of the
 three platforms. `fakes.py` describes one imaginary desktop three times, as
 Quartz reports it, as X11 does, and as `EnumWindows` does, and the suite holds
 all three backends to the same crop, the same label and the same coordinates.

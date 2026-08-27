@@ -622,6 +622,29 @@ try:
 except ReplayMiss as exc:
     ck("Xcode" in str(exc), f"a program naming an app that is not open stops: {exc}")
 
+print("\n== resizing someone else's window ==")
+fakes.reset()
+XR = x11.Backend()
+xw = next(w for w in XR.list_windows() if w.title == "Grocery list")
+ck(XR.set_window_rect(xw, Rect(200.0, 100.0, 640.0, 480.0)),
+   "X11 resizes through the client and confirms the frame followed")
+xafter = next(w for w in XR.list_windows() if w.title == "Grocery list")
+ck(xafter.rect == Rect(200.0, 100.0, 640.0, 480.0),
+   f"the frame is the size asked for, title bar included ({xafter.rect})")
+inner = fakes._find(XR.root, 11)
+ck(inner.geom[3] == 480 - 24,
+   f"which means the client was asked for 24pt less, not for the frame size ({inner.geom})")
+
+fakes.reset()
+XR = x11.Backend()
+xw = next(w for w in XR.list_windows() if w.title == "Grocery list")
+_real_configure = fakes.FakeWin.configure
+fakes.FakeWin.configure = lambda self, **kw: None        # a tiling WM ignoring geometry
+ck(XR.set_window_rect(xw, Rect(200.0, 100.0, 640.0, 480.0)) is False,
+   "a window manager that ignores the request is reported, not assumed")
+fakes.FakeWin.configure = _real_configure
+fakes.reset()
+
 print("\n== fitting the window back ==")
 SHRUNK = [dict(w) for w in fakes.WIN_SCENE]
 for _w in SHRUNK:

@@ -302,17 +302,44 @@ class Backend:
         return raw.split("\x00")[-1] if raw else ""
 
     def set_window_rect(self, win: WindowInfo, rect: Rect) -> bool:
-        """Move and size a window. `handle` is the root child, which under a
-        reparenting WM is the frame -- exactly what the user sees and drags."""
-        if win.handle is None:
+        """Move and size a window, and say whether it actually happened.
+
+        Three things this cannot do naively. The handle is the root child,
+        which under a reparenting window manager -- Openbox, Mutter, KWin,
+        xfwm, so nearly all of them -- is the *frame*, and the frame belongs to
+        the WM. Resizing it directly is not the documented path and WMs vary
+        between honouring it, ignoring it, and desyncing the frame from the
+        client inside. The size request has to go to the client, where the WM
+        picks it up as a ConfigureRequest and moves the frame to match.
+
+        Which introduces the second thing: `win.rect` is the frame, decorations
+        included, while a client resize sets the client area. Ask for the frame
+        size and you get a window a title bar too tall.
+
+        And the third: a ConfigureRequest is a request. The WM may refuse it,
+        clamp it to size hints, or be tiling and ignore geometry entirely. So
+        this reads the frame back afterwards rather than assuming.
+        """
+        frame = win.handle
+        if frame is None:
             return False
+        client = self._client_window(frame) or frame
         try:
-            win.handle.configure(x=int(round(rect.x)), y=int(round(rect.y)),
-                                 width=int(round(rect.w)), height=int(round(rect.h)))
+            pad_w = pad_h = 0
+            if client is not frame:
+                fg, cg = frame.get_geometry(), client.get_geometry()
+                pad_w, pad_h = fg.width - cg.width, fg.height - cg.height
+            client.configure(width=max(1, int(round(rect.w - pad_w))),
+                             height=max(1, int(round(rect.h - pad_h))))
+            if client is not frame:
+                # Position belongs to the frame; the client's x/y are relative
+                # to it and mean something else entirely.
+                frame.configure(x=int(round(rect.x)), y=int(round(rect.y)))
             self.d.sync()
+            now = frame.get_geometry()
         except Exception:                              # noqa: BLE001
             return False
-        return True
+        return abs(now.width - rect.w) <= 2 and abs(now.height - rect.h) <= 2
 
     def frontmost_pid(self) -> int | None:
         active = self._prop(self.root, "_NET_ACTIVE_WINDOW")

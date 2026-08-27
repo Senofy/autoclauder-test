@@ -183,6 +183,12 @@ class FakeWin:
         gx, gy, gw, gh = self.geom
         self.geom = (gx if x is None else x, gy if y is None else y,
                      gw if width is None else width, gh if height is None else height)
+        # A window manager honouring a ConfigureRequest grows the frame to match
+        # the client plus its decorations.
+        frame = getattr(self, "frame", None)
+        if frame is not None:
+            fx, fy, _fw, _fh = frame.geom
+            frame.geom = (fx, fy, self.geom[2] + self.pad[0], self.geom[3] + self.pad[1])
 
     # -- properties --
     def _props(self):
@@ -226,8 +232,11 @@ class FakeWin:
 
 def x11_scene():
     """Front-to-back the same desktop the macOS fake describes, X11-flavoured."""
-    notes = FakeWin(11, 200, 100, 900, 700, "Notes", "Grocery list", pid=100, client=True)
-    frame = FakeWin(10, 200, 100, 900, 700, children=[notes])   # reparenting WM frame
+    # A reparenting WM: the frame is the client plus a 24pt title bar, and the
+    # frame is what the user sees and what gets reported.
+    notes = FakeWin(11, 200, 124, 900, 676, "Notes", "Grocery list", pid=100, client=True)
+    frame = FakeWin(10, 200, 100, 900, 700, children=[notes])
+    notes.frame, notes.pad = frame, (0, 24)
     return [                                                     # bottom to top
         FakeWin(1, 0, 0, 1728, 1117, "Xfdesktop", types_=("_NET_WM_WINDOW_TYPE_DESKTOP",), client=True),
         FakeWin(2, 0, 1080, 1728, 37, "Xfce4-panel", types_=("_NET_WM_WINDOW_TYPE_DOCK",), client=True),
