@@ -1,0 +1,11 @@
+anthropic>=1.1.0
+pyautogui>=0.9.54
+pillow>=10.0.0
+
+# macOS: Quartz for the pointer, AppKit for "which app is frontmost"
+pyobjc-core>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
+
+# Linux/X11: XTEST for input, the root window for pixels and the window list.
+# Also needs `xclip` from apt for the clipboard.
+python-xlib>=0.33; sys_platform == "linux"
