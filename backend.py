@@ -3,8 +3,8 @@
 `desktop.py` holds everything that is the same on every machine -- pointer
 paths, the frame and its coordinate arithmetic, cropping, the action table.
 Everything that is not -- how you post a mouse event, how you grab a display,
-how you ask which window has focus -- lives behind this interface, in `mac.py`
-or `x11.py`.
+how you ask which window has focus -- lives behind this interface, in `mac.py`,
+`x11.py` or `win32.py`.
 
 A backend supplies:
 
@@ -61,11 +61,14 @@ def default_name() -> str:
         return "macos"
     if sys.platform.startswith("linux"):
         return "x11"
-    raise RuntimeError(f"no backend for {sys.platform}; this runs on macOS and on X11")
+    if sys.platform in ("win32", "cygwin"):
+        return "windows"
+    raise RuntimeError(
+        f"no backend for {sys.platform}; this runs on macOS, on X11 and on Windows")
 
 
 def load(name: str | None = None):
-    """Backend for this machine. CLAUDE_BACKEND=macos|x11 overrides the guess."""
+    """Backend for this machine. CLAUDE_BACKEND=macos|x11|windows overrides the guess."""
     name = (name or os.environ.get("CLAUDE_BACKEND") or default_name()).lower()
     if name in ("macos", "mac", "darwin"):
         try:
@@ -81,4 +84,11 @@ def load(name: str | None = None):
             raise RuntimeError(f"the X11 backend needs python-xlib ({exc}); "
                                "sudo apt install python3-xlib xclip") from exc
         return x11.Backend()
-    raise RuntimeError(f"unknown backend {name!r}; try macos or x11")
+    if name in ("windows", "win32", "win"):
+        try:
+            import win32
+        except ImportError as exc:
+            raise RuntimeError(f"the Windows backend could not load ({exc}); "
+                               "pip install -r requirements.txt") from exc
+        return win32.Backend()
+    raise RuntimeError(f"unknown backend {name!r}; try macos, x11 or windows")

@@ -9,3 +9,6 @@ pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"
 # Linux/X11: XTEST for input, the root window for pixels and the window list.
 # Also needs `xclip` from apt for the clipboard.
 python-xlib>=0.33; sys_platform == "linux"
+
+# Windows: nothing extra. The backend is ctypes against user32/kernel32 plus
+# Pillow's ImageGrab, both already above.

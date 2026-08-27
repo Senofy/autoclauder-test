@@ -1,8 +1,8 @@
 # claude-computer-agent
 
 Route 3: the raw `computer_toolset_20260801` tool on the Messages API, with a
-local executor that drives your actual machine — a Mac, or a Debian-ish box
-running X11. Claude never connects to it — Claude emits `tool_use` blocks,
+local executor that drives your actual machine — a Mac, a Debian-ish box running
+X11, or Windows. Claude never connects to it — Claude emits `tool_use` blocks,
 `agent.py` runs them, a backend is the hands.
 
 ```
@@ -11,16 +11,17 @@ desktop.py          the executor: 17 member actions, frames, coordinates -- no O
 backend.py          the interface the two platforms implement, and how one is chosen
 mac.py              macOS hands: Quartz events, screencapture, CGWindowList
 x11.py              Linux hands: XTEST, the root window, EWMH
+win32.py            Windows hands: SendInput, ImageGrab, EnumWindows
 window.py           which rectangle Claude gets to see -- one window, by default
 env.py              reads .env before anything asks the environment a question
 motion.py           human-shaped pointer paths and typing rhythm (pure math)
 motion_preview.py   render sample paths to a PNG, no API key needed
 smoke_test.py       verifies permissions, coordinates and motion, costs no tokens
-tests/              headless regression suite (stubs Quartz, AppKit, Xlib, pyautogui)
+tests/              headless regression suite (stubs Quartz, AppKit, Xlib, windll)
 ```
 
-Everything above `backend.py` is the same on both platforms: the same loop, the
-same window cropping, the same pointer curves, the same tests.
+Everything above `backend.py` is the same on all three: the same loop, the same
+window cropping, the same pointer curves, the same tests.
 
 ## Setup
 
@@ -42,7 +43,7 @@ documented copy.
 | `ANTHROPIC_API_KEY` | required |
 | `ANTHROPIC_BASE_URL` | optional, for a gateway or proxy |
 | `CLAUDE_DISPLAY` | which monitor to capture, 1-based |
-| `CLAUDE_BACKEND` | `macos` or `x11`, overriding the platform guess |
+| `CLAUDE_BACKEND` | `macos`, `x11` or `windows`, overriding the platform guess |
 | `DISPLAY` | Linux only: which X server to drive |
 
 **Anything already exported wins**, so `CLAUDE_DISPLAY=2 python3 agent.py ...`
@@ -63,6 +64,45 @@ from) two permissions in System Settings → Privacy & Security:
 * **Accessibility** — otherwise synthetic input is silently swallowed
 
 Both need a **full quit and reopen** (`⌘Q`, not just closing the window).
+
+### Windows
+
+Nothing to install beyond `requirements.txt`. The backend is `ctypes` against
+user32/kernel32 plus Pillow's `ImageGrab`, and both are already dependencies.
+
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env
+```
+
+If PowerShell refuses to run the activation script, either
+`Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use `cmd` and
+`.venv\Scripts\activate.bat`. Prefer the python.org build over the Microsoft
+Store one, whose sandboxed paths make venvs behave oddly.
+
+Two things decide whether this works, and neither is obvious:
+
+**DPI scaling is handled for you, but only if you let it.** `win32.py` claims
+per-monitor-v2 DPI awareness at import, before anything creates a window —
+that is the only moment the claim takes effect. An unaware process is *lied to*:
+Windows virtualises coordinates to 96 DPI and scales the screenshots it hands
+back, so on any display above 100% scaling every click lands somewhere else.
+Do not run under a compatibility shim, and leave "Override high DPI scaling
+behaviour" unticked on `python.exe`. Step 2 of `smoke_test.py` prints which
+awareness level was claimed.
+
+**Elevation.** Windows blocks synthetic input from a lower-integrity process to
+a higher one, so a normally-launched agent cannot click on anything running as
+administrator — Task Manager, an installer, `regedit`. The executor reports
+`SendInput was blocked` rather than silently missing. Run it elevated if it
+must drive those. The UAC consent dialog itself lives on the secure desktop and
+can never be captured or clicked by anything, by design: a run that triggers one
+sees a frozen screen until you answer it yourself.
+
+Unlike Linux, paste in Windows Terminal is `ctrl+v`, so the clipboard path for
+long or non-ASCII text works in a terminal here too.
 
 ### Debian / Ubuntu
 
@@ -291,8 +331,8 @@ does everything else itself — so the loop, the cropping and the coordinate
 arithmetic are one implementation, and the test suite holds both platforms to
 the same answers.
 
-`CLAUDE_BACKEND=macos|x11` overrides the guess made from `sys.platform`, which
-is mostly useful for exercising the other platform's code.
+`CLAUDE_BACKEND=macos|x11|windows` overrides the guess made from `sys.platform`,
+which is mostly useful for exercising another platform's code.
 
 ### macOS: why Quartz instead of pyautogui for the mouse
 
@@ -309,6 +349,27 @@ Three concrete reasons, all discovered by reading `_pyautogui_osx.py`:
 Drags post `kCGEventLeftMouseDragged`, not `kCGEventMouseMoved`; many views
 ignore the latter entirely. Keyboard still goes through pyautogui, which handles
 keymaps well.
+
+### Windows: four things that are genuinely different
+
+* **Absolute pointer coordinates are 0-65535**, normalised across the whole
+  virtual desktop, not pixels. `move()` converts; the round trip is accurate to
+  a hundredth of a pixel on a 1728px screen.
+* **No click-count field**, exactly as on X11. Windows infers a double click
+  from the gap between presses — `GetDoubleClickTime`, 500ms by default — and
+  `motion.between_clicks` already produces 60-130ms.
+* **No separate dragged event.** Motion with a button held is the drag.
+* **`GetWindowRect` lies on Windows 10 and later.** It includes an invisible
+  resize border, so a window measured that way is several pixels larger than
+  what you see and the crop would be off. `DwmGetWindowAttribute` with
+  `DWMWA_EXTENDED_FRAME_BOUNDS` gives the true visible rectangle.
+
+Windows come from `EnumWindows`, which walks top-level windows in z-order.
+Identity is the process image name with `.exe` stripped, so `--window-app chrome`
+matches. Two kinds of window are dropped: shell furniture, by class name
+(`Shell_TrayWnd`, `Progman`, `WorkerW`), and **cloaked** windows — a UWP app
+sitting on another virtual desktop is still "visible" to `EnumWindows` while the
+compositor is simply not drawing it, and `DWMWA_CLOAKED` is how you tell.
 
 ### X11: three things that are genuinely different
 
@@ -449,7 +510,7 @@ are the supported path.
 cd tests && python3 harness.py
 ```
 
-117 assertions, no API key and no attached display required — on either
-platform. `fakes.py` describes one imaginary desktop twice, once the way Quartz
-reports it and once the way X11 does, and the suite holds both backends to the
-same crop, the same label and the same coordinates.
+148 assertions, no API key and no attached display required — on any of the
+three platforms. `fakes.py` describes one imaginary desktop three times, as
+Quartz reports it, as X11 does, and as `EnumWindows` does, and the suite holds
+all three backends to the same crop, the same label and the same coordinates.

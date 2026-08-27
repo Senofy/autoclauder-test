@@ -274,3 +274,177 @@ XI.X, XI.display, XI.error, XI.ext = XX, XD, XE, XEXT
 for _name, _mod in [("Xlib", XI), ("Xlib.X", XX), ("Xlib.display", XD),
                     ("Xlib.error", XE), ("Xlib.ext", XEXT), ("Xlib.ext.xtest", XTEST)]:
     sys.modules[_name] = _mod
+
+
+# ==========================================================================
+# fake Windows: enough of ctypes.windll for win32.py to run headlessly
+# ==========================================================================
+import ctypes as _ct
+
+WIN_MONITORS = {201: (0, 0, 1728, 1117, True), 202: (1728, 0, 1440, 900, False)}
+
+def _w(hwnd, cls, title, pid, proc, x, y, w, h, exstyle=0, cloaked=False, border=0):
+    """border models the Windows 10 lie: GetWindowRect is `border` px too big
+    on the left, right and bottom; DwmGetWindowAttribute gives the truth."""
+    return dict(hwnd=hwnd, cls=cls, title=title, pid=pid, proc=proc,
+                rect=(x, y, w, h), exstyle=exstyle, cloaked=cloaked, border=border)
+
+# Front to back, the same imaginary desktop the other two fakes describe.
+WIN_SCENE = [
+    _w(101, "#32768", "", 100, "Notes.exe", 900, 420, 260, 200, exstyle=0x8),  # menu, topmost
+    _w(102, "Notes", "Grocery list", 100, "Notes.exe", 200, 100, 900, 700, border=7),
+    _w(103, "Notes", "Scratch", 100, "Notes.exe", 1300, 950, 300, 140),
+    _w(104, "Mail", "Inbox", 200, "Mail.exe", 40, 40, 600, 400),
+    _w(105, "Notes", "shadow", 100, "Notes.exe", 300, 300, 20, 20),
+    _w(106, "Windows.UI.Core.CoreWindow", "Cloaked app", 300, "uwp.exe", 0, 0, 900, 900,
+       cloaked=True),
+    _w(107, "Shell_TrayWnd", "", 400, "explorer.exe", 0, 1077, 1728, 40),   # taskbar
+    _w(108, "Progman", "Program Manager", 400, "explorer.exe", 0, 0, 1728, 1117),
+]
+WIN_WINDOWS = list(WIN_SCENE)
+WIN_FOREGROUND = [102]
+_HEAP = {}
+
+def _byref_obj(ref):
+    return getattr(ref, "_obj", ref)
+
+def _find_win(hwnd):
+    for w in WIN_WINDOWS:
+        if w["hwnd"] == hwnd:
+            return w
+    return None
+
+class _User32:
+    def GetSystemMetrics(self, i):
+        return {0: 1728, 1: 1117, 76: 0, 77: 0, 78: 1728, 79: 1117}.get(i, 0)
+
+    def GetCursorPos(self, ref):
+        p = _byref_obj(ref)
+        p.x, p.y = int(STATE["pos"][0]), int(STATE["pos"][1])
+        return 1
+
+    def SendInput(self, n, ref, size):
+        mi = _byref_obj(ref).mi
+        flags = mi.dwFlags
+        if flags & 0x0001:                                  # MOUSEEVENTF_MOVE
+            x = mi.dx * (1728 - 1) / 65535.0
+            y = mi.dy * (1117 - 1) / 65535.0
+            STATE["pos"] = (x, y)
+            EVENTS.append({"type": "win.move", "pos": (x, y)})
+        for name, flag in (("leftdown", 0x0002), ("leftup", 0x0004),
+                           ("rightdown", 0x0008), ("rightup", 0x0010),
+                           ("middledown", 0x0020), ("middleup", 0x0040)):
+            if flags & flag:
+                down = name.endswith("down")
+                EVENTS.append({"type": "win.press" if down else "win.release",
+                               "button": name[:-4] if down else name[:-2],
+                               "pos": STATE["pos"]})
+        if flags & 0x0800:
+            EVENTS.append({"type": "win.wheel", "axis": "v",
+                           "delta": _ct.c_long(mi.mouseData).value})
+        if flags & 0x1000:
+            EVENTS.append({"type": "win.wheel", "axis": "h",
+                           "delta": _ct.c_long(mi.mouseData).value})
+        return 1
+
+    def SetProcessDpiAwarenessContext(self, ctx): return 1
+    def SetProcessDPIAware(self): return 1
+
+    def EnumWindows(self, proc, lparam):
+        for w in WIN_WINDOWS:
+            proc(w["hwnd"], lparam)
+        return 1
+
+    def EnumDisplayMonitors(self, hdc, clip, proc, data):
+        for hmon in WIN_MONITORS:
+            proc(hmon, None, None, data)
+        return 1
+
+    def GetMonitorInfoW(self, hmon, ref):
+        x, y, w, h, primary = WIN_MONITORS[hmon]
+        info = _byref_obj(ref)
+        info.rcMonitor.left, info.rcMonitor.top = x, y
+        info.rcMonitor.right, info.rcMonitor.bottom = x + w, y + h
+        info.dwFlags = 1 if primary else 0
+        return 1
+
+    def IsWindowVisible(self, hwnd): return 1 if _find_win(hwnd) else 0
+    def GetForegroundWindow(self): return WIN_FOREGROUND[0]
+
+    def GetWindowLongW(self, hwnd, which):
+        return _find_win(hwnd)["exstyle"]
+
+    def GetWindowThreadProcessId(self, hwnd, ref):
+        _byref_obj(ref).value = _find_win(hwnd)["pid"]
+        return 1
+
+    def GetWindowRect(self, hwnd, ref):
+        w = _find_win(hwnd)
+        x, y, ww, hh = w["rect"]
+        b = w["border"]
+        r = _byref_obj(ref)
+        r.left, r.top, r.right, r.bottom = x - b, y, x + ww + b, y + hh + b
+        return 1
+
+    def GetWindowTextLengthW(self, hwnd): return len(_find_win(hwnd)["title"])
+    def GetWindowTextW(self, hwnd, buf, n): buf.value = _find_win(hwnd)["title"]; return 1
+    def GetClassNameW(self, hwnd, buf, n): buf.value = _find_win(hwnd)["cls"]; return 1
+
+    # clipboard
+    def OpenClipboard(self, owner): return 1
+    def CloseClipboard(self): return 1
+    def EmptyClipboard(self): _HEAP.pop("clipboard", None); return 1
+    def GetClipboardData(self, fmt): return _HEAP.get("clipboard", 0)
+    def SetClipboardData(self, fmt, handle): _HEAP["clipboard"] = handle; return handle
+
+class _Kernel32:
+    def GlobalAlloc(self, flags, size):
+        buf = _ct.create_string_buffer(size)
+        handle = 9000 + len(_HEAP)
+        _HEAP[handle] = buf
+        return handle
+    def GlobalLock(self, handle): return _ct.addressof(_HEAP[handle])
+    def GlobalUnlock(self, handle): return 1
+    def OpenProcess(self, access, inherit, pid): return 7000 + pid
+    def CloseHandle(self, h): return 1
+    def QueryFullProcessImageNameW(self, h, flags, buf, size):
+        pid = h - 7000
+        w = next((w for w in WIN_SCENE if w["pid"] == pid), None)
+        buf.value = f"C:\\Program Files\\{w['proc'] if w else 'unknown.exe'}"
+        return 1
+
+class _Shcore:
+    def SetProcessDpiAwareness(self, level): return 0
+
+class _Dwmapi:
+    def DwmGetWindowAttribute(self, hwnd, attr, ref, size):
+        w = _find_win(hwnd)
+        if w is None:
+            return 1
+        if attr == 9:                                   # EXTENDED_FRAME_BOUNDS
+            x, y, ww, hh = w["rect"]
+            r = _byref_obj(ref)
+            r.left, r.top, r.right, r.bottom = x, y, x + ww, y + hh
+            return 0
+        if attr == 14:                                  # CLOAKED
+            _byref_obj(ref).value = 1 if w["cloaked"] else 0
+            return 0
+        return 1
+
+class _WinDLL:
+    user32, kernel32, shcore, dwmapi = _User32(), _Kernel32(), _Shcore(), _Dwmapi()
+
+_ct.windll = _WinDLL()
+
+def win_grab(bbox=None, all_screens=False):
+    """Stand-in for PIL.ImageGrab.grab: pixels encode their screen coordinate."""
+    from PIL import Image as _I
+    x0, y0, x1, y1 = bbox
+    img = _I.new("RGB", (x1 - x0, y1 - y0))
+    img.putdata([(0, (y0 + j) % 256, (x0 + i) % 256)
+                 for j in range(y1 - y0) for i in range(x1 - x0)])
+    return img
+
+def set_windows_scene(wins=None, foreground=102):
+    WIN_WINDOWS[:] = list(WIN_SCENE if wins is None else wins)
+    WIN_FOREGROUND[0] = foreground

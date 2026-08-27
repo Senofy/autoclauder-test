@@ -3,13 +3,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fakes                                   # must import first: installs the stubs
 import sys, json, math, random
-from types import SimpleNamespace
+from types import SimpleNamespace  # noqa: F401  -- used by the fakes above
 from PIL import Image
 
 import motion as mo
 from motion import MotionProfile, path
 import desktop
 import mac
+import win32
 import x11
 import window as wn
 from desktop import Desktop, FailSafeAbort
@@ -22,6 +23,7 @@ NATIVE = Image.new("RGB", (3456, 2234), (30, 30, 40))
 NATIVE.paste(RED, (400, 200, 402, 202))        # logical (200, 100): the Notes corner
 NATIVE.paste(GREEN, (2318, 1598, 2320, 1600))  # logical (1159, 799): its far corner
 mac.Backend._grab = lambda self, i=1: NATIVE
+win32.ImageGrab = SimpleNamespace(grab=fakes.win_grab)   # stands in for PIL's
 BOUNDS = (1728, 1117)
 
 fails = []
@@ -29,9 +31,11 @@ def ck(cond, msg):
     print(("  ok   " if cond else "  FAIL ") + msg)
     if not cond: fails.append(msg)
 
+BACKENDS = {"mac": mac.Backend, "x11": x11.Backend, "win": win32.Backend}
+
 def newdesk(seed=5, window=None, backend="mac", **kw):
     fakes.reset()
-    be = mac.Backend() if backend == "mac" else x11.Backend()
+    be = BACKENDS[backend]()
     d = Desktop(motion=MotionProfile(**kw), rng=random.Random(seed), window=window,
                 backend=be)
     d.screenshot_b64()
@@ -368,6 +372,85 @@ ck(CLIP2["v"] == "before", "the clipboard is put back afterwards")
 fakes.STATE["pos"] = (300.0, 300.0)
 ck(d.run("cursor_position", {})[0]["text"] == "[100, 200]", "cursor_position is window space here too")
 
+print("\n== windows backend ==")
+fakes.reset()
+WB = win32.Backend()
+ck(WB.dpi != "", f"DPI awareness is claimed at startup ({WB.dpi})")
+ck(WB.warning == "", "and no warning when it succeeds")
+ck(WB.display_rect(1) == Rect(0.0, 0.0, 1728.0, 1117.0), "EnumDisplayMonitors gives display 1")
+ck(WB.display_rect(2) == Rect(1728.0, 0.0, 1440.0, 900.0), "and display 2, offset")
+
+wwins = [w for w in WB.list_windows() if w.usable]
+wapps = [w.app for w in wwins]
+ck("explorer" not in wapps, f"taskbar and Progman are furniture ({sorted(set(wapps))})")
+ck("uwp" not in wapps, "a cloaked window on another virtual desktop is skipped")
+ck(wapps[0] == "Notes", "app name comes from the process image, without the .exe")
+wnotes = next(w for w in wwins if w.title == "Grocery list")
+ck(wnotes.rect == Rect(200.0, 100.0, 900.0, 700.0),
+   f"DWM extended frame bounds, not GetWindowRect's invisible border ({wnotes.rect})")
+wmenu = next(w for w in wwins if w.layer >= wn.OVERLAY_LAYER)
+ck(wmenu.rect == Rect(900.0, 420.0, 260.0, 200.0), "a topmost menu class counts as an overlay")
+ck(WB.frontmost_pid() == 100, "GetForegroundWindow -> pid")
+
+wrect, wlabel = WindowTarget().resolve(WB, WB.display_rect(1))
+ck((wrect, wlabel) == (rect, label),
+   f"all three platforms crop the same desktop identically ({wlabel} {wrect})")
+
+d = newdesk(window=WindowTarget(), backend="win")
+f = d._frame
+ck(f.origin == (200.0, 100.0) and (f.width, f.height) == (960, 700) and f.scale == 1.0,
+   f"DPI-aware, so 1 model px is 1 point ({f.width}x{f.height} @ {f.scale})")
+px = Image.open(_io.BytesIO(_b64.b64decode(d.screenshot_b64()))).getpixel((0, 0))
+ck(px == (0, 100, 200), f"the grab covered the window's rectangle ({px})")
+
+d = newdesk(window=WindowTarget(), backend="win")
+d.run("left_click", {"coordinate": [100, 200]})
+ck(len(kinds("win.move")) > 15, "a click glides there on Windows too")
+ck([e["button"] for e in kinds("win.press", "win.release")] == ["left", "left"],
+   "left click is one press and one release")
+land = kinds("win.press")[0]["pos"]
+ck(abs(land[0] - 300.0) < 0.05 and abs(land[1] - 300.0) < 0.05,
+   f"absolute 0-65535 coordinates round-trip to the right point {land}")
+
+d = newdesk(window=WindowTarget(), backend="win")
+d.run("right_click", {"coordinate": [100, 200]})
+ck([e["button"] for e in kinds("win.press")] == ["right"], "right click uses the right button")
+
+d = newdesk(window=WindowTarget(), backend="win")
+d.run("double_click", {"coordinate": [100, 200]})
+ck([e["type"] for e in kinds("win.press", "win.release")]
+   == ["win.press", "win.release", "win.press", "win.release"],
+   "double click is two press/release pairs -- Windows infers it from timing")
+ck(max(fakes.SLEPT) < 0.5,
+   f"and the gap stays under GetDoubleClickTime's 500ms default ({max(fakes.SLEPT)*1000:.0f}ms)")
+
+d = newdesk(window=WindowTarget(), backend="win")
+d.run("left_click_drag", {"start_coordinate": [10, 10], "coordinate": [400, 300]})
+wseq = [e["type"] for e in kinds("win.press", "win.release", "win.move")]
+lo, hi = wseq.index("win.press"), len(wseq) - 1 - wseq[::-1].index("win.release")
+ck("win.release" not in wseq[lo:hi], "the button stays down for the whole drag")
+ck(wseq[lo:hi].count("win.move") > 15, f"dragging through {wseq[lo:hi].count('win.move')} positions")
+
+d = newdesk(window=WindowTarget(), backend="win")
+d.run("scroll", {"scroll_direction": "down", "scroll_amount": 3})
+ck([e["delta"] for e in kinds("win.wheel")] == [-120] * 6,
+   "scroll down is six notches of -WHEEL_DELTA")
+d = newdesk(window=WindowTarget(), backend="win")
+d.run("scroll", {"scroll_direction": "right", "scroll_amount": 1})
+ck({(e["axis"], e["delta"]) for e in kinds("win.wheel")} == {("h", 120)},
+   "horizontal scroll uses the h axis")
+
+ck(d.combo("super+c") == ["win", "c"], "on Windows `super` is the Windows key")
+ck(d.backend.paste_combo == ("ctrl", "v"), "and paste is ctrl+v")
+d.backend.clip_write("before \u00fcnicode")
+ck(d.backend.clip_read() == "before \u00fcnicode",
+   "clipboard round-trips through GlobalAlloc and CF_UNICODETEXT")
+fakes.reset()
+d.run("type", {"text": "z" * 400})
+ck([k for k in fakes.KEYS if k[0] == "hotkey"][0][1] == ("ctrl", "v"),
+   "long text pastes rather than types")
+ck(d.backend.clip_read() == "before \u00fcnicode", "and the clipboard is put back")
+
 # ===========================================================================
 print("\n== agent loop ==")
 class Blk(SimpleNamespace):
@@ -459,6 +542,17 @@ ck("Linux desktop" in systems4[0] and "copy is `ctrl+c`" in systems4[0],
    "and the system prompt stops claiming the Command key exists")
 ck("Notes" in sent4[1][-1]["content"][0]["content"][0]["text"],
    "window capture is the default there as well")
+
+os.environ["CLAUDE_BACKEND"] = "windows"
+WIN = [SimpleNamespace(stop_reason="tool_use", content=[tu("n1", "screenshot", {})]),
+       SimpleNamespace(stop_reason="end_turn", content=[tx("TASK COMPLETE")])]
+rc5, sent5, systems5 = run_agent(WIN)
+os.environ.pop("CLAUDE_BACKEND")
+ck(rc5 == 0, "agent.py runs on the Windows backend")
+ck("Windows desktop" in systems5[0] and "copy is `ctrl+c`" in systems5[0],
+   "and its system prompt talks about Windows, not Command or Super")
+ck("Notes" in sent5[1][-1]["content"][0]["content"][0]["text"],
+   "window capture is the default there too")
 
 print(f"\n{len(fails)} FAILURE(S): {fails}" if fails else "\nALL PASS")
 sys.exit(1 if fails else 0)
