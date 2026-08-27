@@ -179,6 +179,11 @@ class FakeWin:
     def query_tree(self):
         return SimpleNamespace(children=list(self.children))
 
+    def configure(self, x=None, y=None, width=None, height=None):
+        gx, gy, gw, gh = self.geom
+        self.geom = (gx if x is None else x, gy if y is None else y,
+                     gw if width is None else width, gh if height is None else height)
+
     # -- properties --
     def _props(self):
         p = {}
@@ -376,6 +381,13 @@ class _User32:
 
     def GetWindowThreadProcessId(self, hwnd, ref):
         _byref_obj(ref).value = _find_win(hwnd)["pid"]
+        return 1
+
+    def SetWindowPos(self, hwnd, after, x, y, w, h, flags):
+        win = _find_win(hwnd)
+        b = win["border"]
+        # invert the same border model GetWindowRect below applies
+        win["rect"] = (x + b, y, w - 2 * b, h - b)
         return 1
 
     def GetWindowRect(self, hwnd, ref):

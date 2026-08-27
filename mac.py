@@ -159,7 +159,8 @@ class Backend:
                 pid=int(w.get("kCGWindowOwnerPID", 0) or 0),
                 layer=int(w.get("kCGWindowLayer", 0) or 0),
                 rect=Rect(float(b.get("X", 0.0)), float(b.get("Y", 0.0)),
-                          float(b.get("Width", 0.0)), float(b.get("Height", 0.0)))))
+                          float(b.get("Width", 0.0)), float(b.get("Height", 0.0))),
+                handle=w.get("kCGWindowNumber")))
         return out
 
     def frontmost_pid(self) -> int | None:
@@ -172,6 +173,27 @@ class Backend:
             return None
 
     # ---------------- clipboard (pbcopy/pbpaste ship with macOS) -------------
+
+    def set_window_rect(self, win: WindowInfo, rect: Rect) -> bool:
+        """Move and size another application's window.
+
+        Quartz cannot do this -- it is the Accessibility API's job, and the one
+        route to that without a new dependency is System Events, in the same
+        spirit as shelling out to pbcopy. Needs Automation permission for System
+        Events as well as Accessibility, which is a separate prompt.
+        """
+        script = (f'tell application "System Events" to tell '
+                  f'(first process whose unix id is {win.pid}) to '
+                  f'tell (first window whose value of attribute "AXMain" is true) to '
+                  f'set {{position, size}} to '
+                  f'{{{{{round(rect.x)}, {round(rect.y)}}}, '
+                  f'{{{round(rect.w)}, {round(rect.h)}}}}}')
+        try:
+            r = subprocess.run(["osascript", "-e", script],
+                               capture_output=True, text=True, timeout=10)
+        except Exception:                              # noqa: BLE001
+            return False
+        return r.returncode == 0
 
     def clip_read(self) -> str | None:
         try:

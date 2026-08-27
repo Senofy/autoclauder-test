@@ -85,6 +85,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="record fingerprints for steps that have none")
     ap.add_argument("--dry-run", action="store_true",
                     help="resolve and check every step, but move nothing")
+    ap.add_argument("--fit-windows", action="store_true",
+                    help="resize each window back to the size the step was "
+                         "compiled against, so the recorded offsets still mean "
+                         "what they meant")
     ap.add_argument("--tolerance", type=int, default=TOLERANCE,
                     help=f"differing bits still counted as a match (default {TOLERANCE})")
     ap.add_argument("--save", metavar="PATH",
@@ -135,7 +139,8 @@ def main() -> int:
     print("abort: throw the mouse into a screen corner, or ctrl-C\n")
 
     runner = Runner(desk, program, policy=args.on_miss, tolerance=args.tolerance,
-                    learn=args.learn, dry_run=args.dry_run, repair=repair)
+                    learn=args.learn, dry_run=args.dry_run, repair=repair,
+                    fit_windows=args.fit_windows)
     try:
         done = runner.run()
     except ReplayMiss as exc:

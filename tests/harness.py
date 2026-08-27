@@ -622,6 +622,49 @@ try:
 except ReplayMiss as exc:
     ck("Xcode" in str(exc), f"a program naming an app that is not open stops: {exc}")
 
+print("\n== fitting the window back ==")
+SHRUNK = [dict(w) for w in fakes.WIN_SCENE]
+for _w in SHRUNK:
+    if _w["hwnd"] == 102:
+        _w["rect"] = (200, 100, 700, 500)          # the user made it smaller
+
+# A step compiled against the window at 900x700, anchored bottom-left -- the
+# shape of the Discord message-box click.
+BOX = [{"action": "click", "anchor": {"app": "Notes", "corner": "bl",
+                                      "dx": 700, "dy": 40, "window": [900, 700]}}]
+
+d = newdesk(window=WindowTarget(), backend="win")
+fakes.set_windows_scene(SHRUNK)
+pf, _ = load_raw(BOX)
+Runner(d, pf, log=lambda *x: None).run()
+drift = kinds("win.press")[0]["pos"]
+ck(abs(drift[1] - 560.0) < 0.1,
+   f"without fitting, a bottom-left anchor follows the shrunken window ({drift})")
+
+d = newdesk(window=WindowTarget(), backend="win")
+fakes.set_windows_scene(SHRUNK)
+pf2, _ = load_raw(BOX)
+said = []
+Runner(d, pf2, fit_windows=True, log=said.append).run()
+after = next(w for w in d.backend.list_windows() if w.title == "Grocery list").rect
+ck(after == Rect(200.0, 100.0, 900.0, 700.0),
+   f"--fit-windows puts the window back to the size it was compiled at ({after})")
+landed = kinds("win.press")[0]["pos"]
+ck(abs(landed[0] - 900.0) < 0.1 and abs(landed[1] - 760.0) < 0.1,
+   f"so the offset means what it meant and the click lands where recorded ({landed})")
+ck(any("resized" in m for m in said), "and it says that it did so")
+fakes.set_windows_scene()
+
+d = newdesk(window=WindowTarget(), backend="win")
+fakes.set_windows_scene(SHRUNK)
+d.backend.set_window_rect = lambda win, rect: False        # a fixed-size dialog
+pf3, _ = load_raw(BOX)
+said = []
+ck(Runner(d, pf3, fit_windows=True, log=said.append).run() == 1,
+   "a window that refuses to resize does not stop the run")
+ck(any("could not resize" in m for m in said), "it is reported and the anchor is used as is")
+fakes.set_windows_scene()
+
 print("\n== recording a run ==")
 from program import Recorder, anchor_for
 

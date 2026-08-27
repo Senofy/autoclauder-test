@@ -73,6 +73,7 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 CF_UNICODETEXT = 13
 GMEM_MOVEABLE = 0x0002
 MONITORINFOF_PRIMARY = 1
+SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
 
 # Window classes that are the desktop itself rather than something you work in.
 # The analogue of the macOS Dock and the X11 panel.
@@ -219,6 +220,9 @@ class Backend:
             (u.GetWindowLongW, ctypes.c_long, (HWND, ctypes.c_int)),
             (u.GetWindowThreadProcessId, DWORD, (HWND, LPDWORD)),
             (u.GetWindowRect, ctypes.c_bool, (HWND, LPRECT)),
+            (u.SetWindowPos, ctypes.c_bool,
+             (HWND, HWND, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+              ctypes.c_uint)),
             (u.GetWindowTextLengthW, ctypes.c_int, (HWND,)),
             (u.GetWindowTextW, ctypes.c_int, (HWND, ctypes.c_wchar_p, ctypes.c_int)),
             (u.GetClassNameW, ctypes.c_int, (HWND, ctypes.c_wchar_p, ctypes.c_int)),
@@ -366,7 +370,7 @@ class Backend:
                           title=self._window_text(hwnd),
                           pid=int(pid.value),
                           layer=OVERLAY_LAYER if overlay else 0,
-                          rect=rect)
+                          rect=rect, handle=hwnd)
 
     def _frame(self, hwnd) -> Rect | None:
         """The rectangle you can actually see.
@@ -429,6 +433,29 @@ class Backend:
             return name[:-4] if name.lower().endswith(".exe") else name
         finally:
             self.kernel32.CloseHandle(h)
+
+    def set_window_rect(self, win: WindowInfo, rect: Rect) -> bool:
+        """Move and size a window.
+
+        SetWindowPos speaks in GetWindowRect's coordinates, which include the
+        invisible resize border, while `win.rect` is the DWM frame you can
+        actually see. Ask for the visible size plus that difference, or every
+        resize comes out a few pixels short.
+        """
+        if win.handle is None:
+            return False
+        outer = RECT()
+        if not self.user32.GetWindowRect(win.handle, byref(outer)):
+            return False
+        pad_w = (outer.right - outer.left) - win.rect.w
+        pad_h = (outer.bottom - outer.top) - win.rect.h
+        pad_x = win.rect.x - outer.left
+        pad_y = win.rect.y - outer.top
+        return bool(self.user32.SetWindowPos(
+            win.handle, None,
+            int(round(rect.x - pad_x)), int(round(rect.y - pad_y)),
+            int(round(rect.w + pad_w)), int(round(rect.h + pad_h)),
+            SWP_NOZORDER | SWP_NOACTIVATE))
 
     def frontmost_pid(self) -> int | None:
         hwnd = self.user32.GetForegroundWindow()

@@ -467,6 +467,18 @@ featureless pixels, and would quietly verify nothing.
 | `repair` | hand that one step to Claude, take the coordinate it clicks, rewrite the step in the program, carry on |
 | `force` | act anyway, for when the pixels are noisy and the geometry is right |
 
+**`--fit-windows` removes the divergence instead of detecting it.** An offset
+only means what it meant if the geometry is what it was, and every anchor
+records the window size it was compiled against. With that flag, replay resizes
+each window back to that size before the step runs, so a window you have since
+made smaller stops being a problem at all. Resizing another application's window
+is the one thing the backends could not previously do: `SetWindowPos` on
+Windows (corrected for the invisible border, which `SetWindowPos` counts and the
+DWM frame does not), `configure` on X11, and System Events via `osascript` on
+macOS, which needs Automation permission on top of Accessibility. A window that
+refuses -- a fixed-size dialog, anything full-screen -- is a warning, not a
+failure, and the run goes on with the anchor as it stands.
+
 `repair` is the one that makes this worth having. A UI moves, one step misses,
 one API call fixes it, and the program on disk is correct again for every run
 after. `--dry-run` resolves and checks every step without moving anything, which
@@ -582,7 +594,7 @@ are the supported path.
 cd tests && python3 harness.py
 ```
 
-214 assertions, no API key and no attached display required — on any of the
+220 assertions, no API key and no attached display required — on any of the
 three platforms. `fakes.py` describes one imaginary desktop three times, as
 Quartz reports it, as X11 does, and as `EnumWindows` does, and the suite holds
 all three backends to the same crop, the same label and the same coordinates.

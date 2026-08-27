@@ -1,0 +1,199 @@
+{
+  "task": "open discord, click on ajsk, type in 'test is a blueberry' and hit send",
+  "steps": [
+    {
+      "action": "key",
+      "text": "super+space"
+    },
+    {
+      "action": "wait",
+      "duration": 1
+    },
+    {
+      "action": "type",
+      "text": "Discord"
+    },
+    {
+      "action": "key",
+      "text": "Return"
+    },
+    {
+      "action": "wait",
+      "duration": 2
+    },
+    {
+      "action": "wait",
+      "duration": 2
+    },
+    {
+      "action": "key",
+      "text": "super+q"
+    },
+    {
+      "action": "wait",
+      "duration": 1
+    },
+    {
+      "action": "wait",
+      "duration": 2
+    },
+    {
+      "action": "scroll",
+      "scroll_direction": "up",
+      "scroll_amount": 5,
+      "anchor": {
+        "app": "Discord",
+        "corner": "tl",
+        "dx": 35.0,
+        "dy": 300.0,
+        "window": [
+          1492,
+          1141
+        ],
+        "title": "#\ud83c\udf04general | Prop Firm Center - Discord"
+      },
+      "fingerprint": "f1f7e5662968e4f0"
+    },
+    {
+      "action": "scroll",
+      "scroll_direction": "up",
+      "scroll_amount": 15,
+      "anchor": {
+        "app": "Discord",
+        "corner": "tl",
+        "dx": 35.0,
+        "dy": 300.0,
+        "window": [
+          1492,
+          1141
+        ],
+        "title": "#\ud83c\udf04general | Prop Firm Center - Discord"
+      },
+      "fingerprint": "1a1d286953791a7c"
+    },
+    {
+      "action": "scroll",
+      "scroll_direction": "up",
+      "scroll_amount": 30,
+      "anchor": {
+        "app": "Discord",
+        "corner": "tl",
+        "dx": 35.0,
+        "dy": 300.0,
+        "window": [
+          1492,
+          1141
+        ],
+        "title": "#\ud83c\udf04general | Prop Firm Center - Discord"
+      },
+      "fingerprint": "f06c54ccf0195a25"
+    },
+    {
+      "action": "click",
+      "anchor": {
+        "app": "Discord",
+        "corner": "tl",
+        "dx": 35.0,
+        "dy": 52.0,
+        "window": [
+          1492,
+          1141
+        ],
+        "title": "#\ud83c\udf04general | Prop Firm Center - Discord"
+      },
+      "fingerprint": "9b64d0f0e9e85420"
+    },
+    {
+      "action": "wait",
+      "duration": 1
+    },
+    {
+      "action": "click",
+      "anchor": {
+        "app": "Discord",
+        "corner": "tl",
+        "dx": 148.0,
+        "dy": 449.0,
+        "window": [
+          1492,
+          1141
+        ],
+        "title": "@dingodong0 - Discord"
+      },
+      "fingerprint": "58a4066969364880"
+    },
+    {
+      "action": "wait",
+      "duration": 1
+    },
+    {
+      "action": "click",
+      "anchor": {
+        "app": "Discord",
+        "corner": "bl",
+        "dx": 700.0,
+        "dy": 38.0,
+        "window": [
+          1492,
+          1141
+        ],
+        "title": "@Ajsk - Discord"
+      },
+      "fingerprint": "0000000000000000"
+    },
+    {
+      "action": "type",
+      "text": "test is a blueberry"
+    },
+    {
+      "action": "triple_click",
+      "anchor": {
+        "app": "Discord",
+        "corner": "bl",
+        "dx": 700.0,
+        "dy": 38.0,
+        "window": [
+          1492,
+          1141
+        ],
+        "title": "@Ajsk - Discord"
+      },
+      "fingerprint": "0000000000000000"
+    },
+    {
+      "action": "key",
+      "text": "cmd+a"
+    },
+    {
+      "action": "key",
+      "text": "BackSpace"
+    },
+    {
+      "action": "click",
+      "anchor": {
+        "app": "Discord",
+        "corner": "bl",
+        "dx": 700.0,
+        "dy": 38.0,
+        "window": [
+          1492,
+          1141
+        ],
+        "title": "@Ajsk - Discord"
+      },
+      "fingerprint": "0000000000000000"
+    },
+    {
+      "action": "type",
+      "text": "test is a blueberry"
+    },
+    {
+      "action": "key",
+      "text": "Return"
+    },
+    {
+      "action": "wait",
+      "duration": 1
+    }
+  ]
+}

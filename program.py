@@ -262,7 +262,8 @@ class Runner:
 
     def __init__(self, desk, program: Program, policy: str = "abort",
                  tolerance: int = TOLERANCE, learn: bool = False,
-                 dry_run: bool = False, repair=None, log=print) -> None:
+                 dry_run: bool = False, repair=None, fit_windows: bool = False,
+                 log=print) -> None:
         if policy not in ("abort", "repair", "force"):
             raise ProgramError(f"policy must be abort, repair or force, not {policy!r}")
         if policy == "repair" and repair is None:
@@ -270,6 +271,7 @@ class Runner:
         self.desk, self.program = desk, program
         self.policy, self.tolerance = policy, tolerance
         self.learn, self.dry_run = learn, dry_run
+        self.fit_windows = fit_windows
         self.repair, self.log = repair, log
         self.changed = False        # a learn or a repair rewrote the program
 
@@ -281,6 +283,29 @@ class Runner:
         if found is None:
             raise ReplayMiss(f"no window on screen for app {anchor.app!r}")
         return found[0]
+
+    def fit(self, anchor: Anchor, rect: Rect) -> Rect:
+        """Put the window back to the size this step was compiled against.
+
+        Better than detecting the divergence: there is none to detect. An
+        offset only means what it meant if the geometry is what it was. Some
+        windows will refuse -- fixed-size dialogs, anything full-screen -- so a
+        refusal is a warning and the run continues on the anchor alone.
+        """
+        if not anchor.window:
+            return rect
+        want = Rect(rect.x, rect.y, anchor.window[0], anchor.window[1])
+        if abs(rect.w - want.w) <= 1 and abs(rect.h - want.h) <= 1:
+            return rect
+        target = next((w for w in self.desk.backend.list_windows()
+                       if w.usable and w.layer == 0
+                       and anchor.app.lower() in w.app.lower()), None)
+        if target is None or not self.desk.backend.set_window_rect(target, want):
+            self.log(f"      \033[33mcould not resize\033[0m {anchor.app} to "
+                     f"{want.w:.0f}x{want.h:.0f}; going on with the anchor as it is")
+            return rect
+        self.log(f"      resized {anchor.app} to {want.w:.0f}x{want.h:.0f}")
+        return self.window(anchor)
 
     def patch(self, point) -> Image.Image:
         half = PATCH / 2
@@ -355,6 +380,8 @@ class Runner:
             point = None
             if step.needs_point:
                 rect = self.window(step.anchor)
+                if self.fit_windows and not self.dry_run:
+                    rect = self.fit(step.anchor, rect)
                 dw, dh = step.anchor.resized(rect)
                 if abs(dw) > 1 or abs(dh) > 1:
                     self.log(f"      note: {step.anchor.app} is {dw:+.0f}x{dh:+.0f} "

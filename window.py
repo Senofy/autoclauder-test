@@ -15,7 +15,7 @@ display -- the same space the pointer is driven in, on both platforms.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Owners whose windows are desktop furniture rather than something you work in.
 # The macOS Dock's window is the whole screen and "Window Server" owns the menu
@@ -88,6 +88,10 @@ class WindowInfo:
     pid: int
     layer: int
     rect: Rect
+    # Whatever the platform needs to address this window again: an hwnd, an X
+    # window id, nothing at all on macOS (which goes by pid). Out of equality,
+    # so two backends describing the same window still compare equal.
+    handle: object = field(default=None, compare=False)
 
     @property
     def label(self) -> str:

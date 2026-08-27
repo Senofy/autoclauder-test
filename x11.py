@@ -271,7 +271,8 @@ class Backend:
         title = (self._decode(self._prop(client, "_NET_WM_NAME"))
                  or self._decode(self._prop(client, "WM_NAME")))
         return WindowInfo(app=self._app_name(client), title=title,
-                          pid=int(pid[0]) if pid else 0, layer=layer, rect=rect)
+                          pid=int(pid[0]) if pid else 0, layer=layer, rect=rect,
+                          handle=w)
 
     def _name_of_atom(self, atom: int) -> str:
         try:
@@ -299,6 +300,19 @@ class Backend:
             pass
         raw = self._decode(self._prop(w, "WM_CLASS"))
         return raw.split("\x00")[-1] if raw else ""
+
+    def set_window_rect(self, win: WindowInfo, rect: Rect) -> bool:
+        """Move and size a window. `handle` is the root child, which under a
+        reparenting WM is the frame -- exactly what the user sees and drags."""
+        if win.handle is None:
+            return False
+        try:
+            win.handle.configure(x=int(round(rect.x)), y=int(round(rect.y)),
+                                 width=int(round(rect.w)), height=int(round(rect.h)))
+            self.d.sync()
+        except Exception:                              # noqa: BLE001
+            return False
+        return True
 
     def frontmost_pid(self) -> int | None:
         active = self._prop(self.root, "_NET_ACTIVE_WINDOW")
