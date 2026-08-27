@@ -15,6 +15,10 @@ enumeration through a reparenting frame, override-redirect popups, button
 numbering and wheel buttons; on Windows, DPI awareness, cloaked windows, the
 `GetWindowRect` border lie, and 0-65535 absolute coordinates.
 
+Compiled programs get their own section: corner selection, anchors surviving a
+move and a resize, fingerprint matching, the three miss policies, and that a
+featureless patch is called out rather than silently verifying nothing.
+
 `fakes.py` describes one imaginary desktop three times -- as Quartz reports it,
 as X11 does, and as `EnumWindows` does -- so all three backends can be held to
 the same crop, the same label and the same coordinates.

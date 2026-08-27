@@ -322,13 +322,35 @@ class Desktop:
             if n < clicks:
                 time.sleep(mo.between_clicks(self.motion, self.rng))
 
+    def click_at(self, point, button: str = "left", clicks: int = 1,
+                 modifiers=()) -> None:
+        """Click a point in LOGICAL coordinates. `point` None clicks where we are.
+
+        Claude's actions arrive in model space and go through `to_logical`;
+        `program.py` replays anchors that are already logical and has no frame
+        to measure against. Both end up here.
+        """
+        if point is not None:
+            self.glide(point)
+        time.sleep(mo.settle(self.motion, self.rng))
+        with _held(list(modifiers)):
+            self._press(button, clicks)
+
+    def drag_at(self, start, end, modifiers=()) -> None:
+        """Press at `start`, travel to `end`, release. Logical coordinates."""
+        self.glide(start)
+        time.sleep(mo.settle(self.motion, self.rng))
+        with _held(list(modifiers)):
+            self.backend.press("left", start[0], start[1], 1)
+            time.sleep(mo.hold(self.motion, self.rng))
+            self.glide(end, drag_button="left")
+            time.sleep(mo.settle(self.motion, self.rng))
+            self.backend.release("left", end[0], end[1], 1)
+
     def _click(self, a, button: str, clicks: int):
         mods = self.combo(a["text"]) if a.get("text") else []
-        if a.get("coordinate"):
-            self.glide(self.to_logical(a["coordinate"]))
-        time.sleep(mo.settle(self.motion, self.rng))
-        with _held(mods):
-            self._press(button, clicks)
+        point = self.to_logical(a["coordinate"]) if a.get("coordinate") else None
+        self.click_at(point, button, clicks, mods)
         return _ok()
 
     def _do_left_click(self, a):    return self._click(a, "left", 1)
@@ -338,17 +360,9 @@ class Desktop:
     def _do_triple_click(self, a):  return self._click(a, "left", 3)
 
     def _do_left_click_drag(self, a):
-        mods = self.combo(a["text"]) if a.get("text") else []
-        start = self.to_logical(a["start_coordinate"])
-        end = self.to_logical(a["coordinate"])
-        self.glide(start)
-        time.sleep(mo.settle(self.motion, self.rng))
-        with _held(mods):
-            self.backend.press("left", start[0], start[1], 1)
-            time.sleep(mo.hold(self.motion, self.rng))
-            self.glide(end, drag_button="left")
-            time.sleep(mo.settle(self.motion, self.rng))
-            self.backend.release("left", end[0], end[1], 1)
+        self.drag_at(self.to_logical(a["start_coordinate"]),
+                     self.to_logical(a["coordinate"]),
+                     self.combo(a["text"]) if a.get("text") else [])
         return _ok()
 
     def _do_mouse_move(self, a):

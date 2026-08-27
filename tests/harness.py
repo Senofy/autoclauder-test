@@ -2,6 +2,7 @@ import os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import fakes                                   # must import first: installs the stubs
+import tempfile, pathlib
 import sys, json, math, random
 from types import SimpleNamespace  # noqa: F401  -- used by the fakes above
 from PIL import Image
@@ -374,12 +375,12 @@ ck(d.run("cursor_position", {})[0]["text"] == "[100, 200]", "cursor_position is 
 
 print("\n== backend interface ==")
 import backend as bemod
-for label, cls in (("macOS", mac.Backend), ("X11", x11.Backend), ("Windows", win32.Backend)):
+for _plat, _cls in (("macOS", mac.Backend), ("X11", x11.Backend), ("Windows", win32.Backend)):
     fakes.reset()
-    inst = cls()
-    ck(isinstance(inst, bemod.Backend), f"{label} satisfies the Backend protocol")
+    inst = _cls()
+    ck(isinstance(inst, bemod.Backend), f"{_plat} satisfies the Backend protocol")
     ck(bemod.check_interface(inst) == [],
-       f"{label} signatures match: {bemod.check_interface(inst)}")
+       f"{_plat} signatures match: {bemod.check_interface(inst)}")
 
 class Drifted(win32.Backend):
     def capture(self, display_index):            # a parameter quietly dropped
@@ -466,6 +467,140 @@ d.run("type", {"text": "z" * 400})
 ck([k for k in fakes.KEYS if k[0] == "hotkey"][0][1] == ("ctrl", "v"),
    "long text pastes rather than types")
 ck(d.backend.clip_read() == "before \u00fcnicode", "and the clipboard is put back")
+
+print("\n== compiled programs ==")
+import program as prog
+from program import Anchor, Program, ProgramError, ReplayMiss, Runner, Step
+
+W = Rect(200.0, 100.0, 900.0, 700.0)          # the Notes window in every fake
+ck(Anchor.of((230, 140), W, "Notes").corner == "tl", "a point near the top-left anchors tl")
+ck(Anchor.of((1070, 140), W, "Notes").corner == "tr", "near the top-right, tr")
+ck(Anchor.of((230, 770), W, "Notes").corner == "bl", "near the bottom-left, bl")
+ck(Anchor.of((1070, 770), W, "Notes").corner == "br", "near the bottom-right, br")
+
+send = Anchor.of((1070, 770), W, "Notes")     # a Send button, bottom right
+ck(send.point(W) == (1070.0, 770.0), "an anchor round-trips exactly")
+ck(send.point(Rect(500.0, 300.0, 900.0, 700.0)) == (1370.0, 970.0),
+   "a moved window carries the point with it")
+ck(send.point(Rect(200.0, 100.0, 700.0, 500.0)) == (870.0, 570.0),
+   "a resized window keeps a bottom-right point against the bottom-right")
+side = Anchor.of((230, 140), W, "Notes")
+ck(side.point(Rect(200.0, 100.0, 700.0, 500.0)) == (230.0, 140.0),
+   "while a top-left point stays where it was")
+tiny = Rect(200.0, 100.0, 40.0, 40.0)
+px, py = side.point(tiny)
+ck(200 <= px < 240 and 100 <= py < 140, f"a window smaller than the offset clamps inside it ({px},{py})")
+ck(send.resized(Rect(200.0, 100.0, 700.0, 500.0)) == (-200.0, -200.0), "resize is reported")
+
+base = Image.new("RGB", (64, 64))
+base.putdata([(i * 3 % 256, j * 5 % 256, 0) for j in range(64) for i in range(64)])
+same = base.copy()
+other = base.transpose(Image.FLIP_LEFT_RIGHT)
+ck(prog.distance(prog.fingerprint(base), prog.fingerprint(same)) == 0,
+   "the same pixels fingerprint identically")
+ck(prog.distance(prog.fingerprint(base), prog.fingerprint(other)) > prog.TOLERANCE,
+   f"different pixels do not ({prog.distance(prog.fingerprint(base), prog.fingerprint(other))} bits)")
+
+def load_raw(steps, **kw):
+    tmp2 = pathlib.Path(tempfile.mkdtemp()) / "p.json"
+    tmp2.write_text(json.dumps({"task": "t", "steps": steps}))
+    return Program.load(tmp2), tmp2
+
+for bad, why in (
+    ([{"action": "fly"}], "an unknown action"),
+    ([{"action": "click"}], "a click with no anchor"),
+    ([{"action": "type"}], "type with no text"),
+    ([{"action": "scroll", "anchor": {"app": "Notes"}}], "scroll with no direction"),
+    ([{"action": "click", "anchor": {"app": "Notes", "corner": "middle"}}], "a bad corner"),
+):
+    try:
+        load_raw(bad); ck(False, f"{why} is refused at load")
+    except ProgramError:
+        ck(True, f"{why} is refused at load")
+try:
+    load_raw([]); ck(False, "an empty program is refused")
+except ProgramError:
+    ck(True, "an empty program is refused")
+
+PROG = [
+    {"action": "click", "anchor": {"app": "Notes", "corner": "tl", "dx": 100, "dy": 200},
+     "note": "the message box"},
+    {"action": "type", "text": "test is a blueberry"},
+    {"action": "key", "text": "Return"},
+]
+p1, path1 = load_raw(PROG)
+ck([s.action for s in p1.steps] == ["click", "type", "key"], "a valid program loads")
+ck(p1.steps[0].anchor.app == "Notes" and p1.steps[1].anchor is None,
+   "only the steps that touch a point carry an anchor")
+
+d = newdesk(window=WindowTarget())
+r = Runner(d, p1, learn=True, log=lambda *a: None)
+ck(r.run() == 3, "a learning run executes every step")
+ck(p1.steps[0].fingerprint and r.changed, "and records the fingerprint it saw")
+moved = [e for e in kinds("kCGEventMouseMoved")]
+ck(abs(moved[-1]["pos"][0] - 300.0) < 0.01 and abs(moved[-1]["pos"][1] - 300.0) < 0.01,
+   f"the click landed at the window-relative point {moved[-1]['pos']}")
+ck([k[0] for k in fakes.KEYS if k[0] in ("write", "press")][:1] == ["write"],
+   "the type step typed")
+
+p1.save(path1)
+p2 = Program.load(path1)
+ck(p2.steps[0].fingerprint == p1.steps[0].fingerprint, "a learned program round-trips to disk")
+
+p2.steps[0].fingerprint = "5a5a5a5a5a5a5a5a"          # nothing on screen looks like this
+d = newdesk(window=WindowTarget())
+try:
+    Runner(d, p2, policy="abort", log=lambda *a: None).run()
+    ck(False, "abort stops on a mismatch")
+except ReplayMiss as exc:
+    ck("step 1" in str(exc) and "differ" in str(exc), f"abort stops on a mismatch: {exc}")
+ck(not kinds("kCGEventLeftMouseDown"), "and nothing was clicked before it stopped")
+
+d = newdesk(window=WindowTarget())
+n = Runner(d, p2, policy="force", log=lambda *a: None).run()
+ck(n == 3 and len(kinds("kCGEventLeftMouseDown")) == 1, "force clicks anyway")
+
+d = newdesk(window=WindowTarget())
+calls = []
+def fake_repair(step, index, desk):
+    calls.append(index)
+    return Anchor.of((250.0, 250.0), Rect(200.0, 100.0, 900.0, 700.0), "Notes")
+rp = Runner(d, p2, policy="repair", repair=fake_repair, log=lambda *a: None)
+ck(rp.run() == 3 and calls == [0], "repair is asked about the failing step only")
+ck(rp.changed and p2.steps[0].anchor.dx == 50.0,
+   "and the step is rewritten with what it found")
+ck(p2.steps[0].fingerprint != "5a5a5a5a5a5a5a5a", "with a fresh fingerprint")
+
+flat = Image.new("RGB", (64, 64), (30, 30, 40))
+ck(prog.contrast(flat) < prog.FLAT, "a blank patch has nothing to fingerprint")
+ck(prog.fingerprint(flat) == "0000000000000000",
+   "which is why it hashes to zero -- and would match any other blank patch")
+said = []
+d = newdesk(window=WindowTarget())
+p5, _ = load_raw(PROG)
+Runner(d, p5, learn=True, log=said.append).run()
+ck(any("nearly blank" in m for m in said),
+   "so learning one says so out loud")
+
+d = newdesk(window=WindowTarget())
+p3, _ = load_raw(PROG)
+ck(Runner(d, p3, dry_run=True, log=lambda *a: None).run() == 3, "a dry run walks every step")
+ck(not fakes.EVENTS, "and moves nothing at all")
+
+try:
+    Runner(newdesk(), p3, policy="repair", log=lambda *a: None)
+    ck(False, "the repair policy needs a repairer")
+except ProgramError:
+    ck(True, "the repair policy needs a repairer")
+
+d = newdesk(window=WindowTarget())
+p4, _ = load_raw([{"action": "click", "anchor": {"app": "Xcode", "corner": "tl",
+                                                 "dx": 10, "dy": 10}}])
+try:
+    Runner(d, p4, log=lambda *a: None).run()
+    ck(False, "a program naming an app that is not open stops")
+except ReplayMiss as exc:
+    ck("Xcode" in str(exc), f"a program naming an app that is not open stops: {exc}")
 
 # ===========================================================================
 print("\n== agent loop ==")

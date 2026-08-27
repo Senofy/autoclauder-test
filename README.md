@@ -13,6 +13,8 @@ mac.py              macOS hands: Quartz events, screencapture, CGWindowList
 x11.py              Linux hands: XTEST, the root window, EWMH
 win32.py            Windows hands: SendInput, ImageGrab, EnumWindows
 window.py           which rectangle Claude gets to see -- one window, by default
+program.py          compiled task programs: anchors, fingerprints, the runner
+replay.py           run one, with no model in the loop
 env.py              reads .env before anything asks the environment a question
 motion.py           human-shaped pointer paths and typing rhythm (pure math)
 motion_preview.py   render sample paths to a PNG, no API key needed
@@ -413,6 +415,69 @@ text block plus an image block (the line names the window Claude is looking at),
 and everything else is `"OK"`. Get the `toolset_name` wrong and the API rejects
 the turn.
 
+## Compiling a task
+
+The loop above decides everything at run time: screenshot, think, move, repeat.
+For a task you do the same way every time -- the daily form, the same five
+clicks -- that is a lot of money and about two seconds per step. A **program**
+moves that decision to compile time. Claude decides once, or you write the steps
+yourself, and after that it runs with no model in the loop at all.
+
+```bash
+python3 replay.py send-message.json --learn      # record what it should look like
+python3 replay.py send-message.json              # every run after that: no API calls
+```
+
+A program is JSON, and short enough to write by hand:
+
+```json
+{
+  "task": "post the standup note",
+  "steps": [
+    {"action": "click", "note": "the message box",
+     "anchor": {"app": "Discord", "corner": "bl", "dx": 231, "dy": 40}},
+    {"action": "type", "text": "standup: shipped the X11 backend"},
+    {"action": "key", "text": "Return"}
+  ]
+}
+```
+
+**Anchors, not screen coordinates.** A step that touches a point stores an
+offset from a corner of a named application's window, and the corner is
+whichever one the point was nearest. That is what makes a resize survivable: a
+sidebar item stays put against the top-left, a Send button against the
+bottom-right. The window can move, the desktop can be a different size, and the
+click still lands. Nothing else in this project would have made that possible --
+it falls out of capturing by window in the first place.
+
+**Fingerprints, because landing is not the same as being right.** The danger in
+a replay is not that it fails. It is that it succeeds at the wrong thing, and a
+click where Send used to be is worse than an error. So each step also stores a
+hash of the 64 points around its target, and checks them before acting.
+`--learn` fills those in on a run you have watched, so you can author the
+geometry and let the machine record the pixels. If a target sits on blank
+canvas, learning says so: a hash of featureless pixels matches any other
+featureless pixels, and would quietly verify nothing.
+
+**What happens on a mismatch is yours to choose:**
+
+| `--on-miss` | behaviour |
+|---|---|
+| `abort` (default) | stop, and say which step diverged and by how much |
+| `repair` | hand that one step to Claude, take the coordinate it clicks, rewrite the step in the program, carry on |
+| `force` | act anyway, for when the pixels are noisy and the geometry is right |
+
+`repair` is the one that makes this worth having. A UI moves, one step misses,
+one API call fixes it, and the program on disk is correct again for every run
+after. `--dry-run` resolves and checks every step without moving anything, which
+is the safe way to see whether yesterday's program still fits today's screen.
+
+**The limit, stated plainly.** This is for repeating a known task on a stable
+UI. It is not a cheaper agent. If the interface moves often you will sit in
+`repair` and pay the model anyway, at which point you have re-invented the live
+loop with extra steps. Reach for it when you have already watched the agent do
+something correctly and want it done that way a hundred more times.
+
 ## Which model
 
 `--model` defaults to **`claude-sonnet-5`**. Four models support the
@@ -510,7 +575,7 @@ are the supported path.
 cd tests && python3 harness.py
 ```
 
-148 assertions, no API key and no attached display required — on any of the
+193 assertions, no API key and no attached display required — on any of the
 three platforms. `fakes.py` describes one imaginary desktop three times, as
 Quartz reports it, as X11 does, and as `EnumWindows` does, and the suite holds
 all three backends to the same crop, the same label and the same coordinates.
