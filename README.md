@@ -67,22 +67,119 @@ Both need a **full quit and reopen** (`⌘Q`, not just closing the window).
 ### Debian / Ubuntu
 
 ```bash
-sudo apt install python3-xlib xclip     # xsel works too, if you prefer it
-echo $XDG_SESSION_TYPE                   # must say x11
+sudo apt install python3-venv python3-full xclip    # xsel works too
+echo $XDG_SESSION_TYPE                               # must say x11
 ```
+
+`python3-venv` matters: Debian marks its system Python
+[externally managed](https://peps.python.org/pep-0668/), so a bare
+`pip install -r requirements.txt` fails with `error: externally-managed-environment`
+before it installs anything. Create the venv from the Setup section above first.
+Do not reach for `--break-system-packages`.
+
+`python-xlib` comes from PyPI through `requirements.txt`, so the `python3-xlib`
+apt package is only needed if you are skipping the venv. `xclip` is a real
+binary the clipboard path shells out to, so that one you do need.
 
 There is no permission dialog to clear: X11 lets any client on the display read
 the screen and inject input. That is the property that makes this work, and the
 reason a separate user account is a better idea here than anywhere else.
 
-The X11 backend is covered by the test suite against a stubbed X server, and it
-has not yet been run against a real one. Start with `smoke_test.py`, which
-checks every piece of it without spending a token.
-
 **Wayland is not supported.** Under a Wayland session this can only see and
-drive XWayland clients; native Wayland windows capture black and receive
-nothing. The agent prints a warning if it detects one. On GNOME or KDE, pick the
-"on Xorg" session at the login screen.
+drive XWayland clients; native Wayland windows capture black, and the screen
+grab itself usually fails outright with `Xlib.error.BadMatch` on
+`major_opcode: 73` (`X_GetImage`). The agent warns when it detects one. On GNOME
+or KDE, pick the "on Xorg" session at the login screen.
+
+### Raspberry Pi, start to finish
+
+Raspberry Pi OS Bookworm boots Wayland by default on the Pi 4 and Pi 5, so a
+fresh Pi will fail at the first screenshot. The whole procedure, including the
+two things that bite on a headless Pi:
+
+**1. Switch the session to X11.**
+
+```bash
+sudo raspi-config
+```
+
+Advanced Options -> Wayland -> **W1 X11** (Openbox), then **reboot**. The menu
+shows what is selected, not what is running; nothing changes until you restart.
+
+**2. Verify you are actually on X11**, from a terminal on the Pi's desktop:
+
+```bash
+echo $XDG_SESSION_TYPE; xrandr --listmonitors; pgrep -l "wayfire|labwc|openbox"
+```
+
+The monitor name is the reliable tell -- `HDMI-1` means X11, **`XWAYLAND0` means
+you are still on Wayland** whatever the menu said. `XDG_SESSION_TYPE` can be
+stale in a terminal that outlived the switch.
+
+**3. If the Pi is headless, force a display on.** With no monitor attached there
+is no EDID, X falls back to 1024x768, and `xrandr` shows every output as
+`disconnected`. Add a `video=` argument to the *single line* in
+`/boot/firmware/cmdline.txt` -- space-separated, never on a new line:
+
+```
+video=HDMI-A-1:2560x1440M@60D
+```
+
+Both suffixes are load-bearing:
+
+* **`M`** computes a CVT mode for that resolution. Without it the kernel looks
+  for the mode in the connector's EDID list, a disconnected connector has no
+  list, and the argument silently does nothing.
+* **`D`** forces the connector on with nothing plugged in.
+
+Use the kernel's connector name (`HDMI-A-1`), which is not X's name for the same
+port (`HDMI-1`). Reboot, then check the argument actually took:
+
+```bash
+cat /proc/cmdline; cat /sys/class/drm/card*-HDMI-A-1/modes | head -3
+```
+
+`/proc/cmdline` is the line in use, as against the line in the file -- on
+Bookworm a stale `/boot/cmdline.txt` can sit next to the real
+`/boot/firmware/cmdline.txt` and do nothing. There must be exactly **one**
+`video=` token; `raspi-config`'s headless-resolution setting writes one too.
+`dmesg | grep -i "forcing"` should show `forcing HDMI-A-1 connector on`.
+
+**4. Make X use the mode.** Forcing the connector is not enough. X sees a
+connector with no EDID -- `0mm x 0mm` in `xrandr` -- and stays conservative,
+picking 1024x768 even with 2560x1440 in the list:
+
+```bash
+xrandr --output HDMI-1 --mode 2560x1440      # right now
+```
+
+```bash
+sudo mkdir -p /etc/X11/xorg.conf.d
+sudo tee /etc/X11/xorg.conf.d/10-hdmi.conf > /dev/null <<'EOF'
+Section "Monitor"
+    Identifier "HDMI-1"
+    Option "PreferredMode" "2560x1440"
+EndSection
+EOF
+```
+
+That applies when X starts, so there is no flash of 1024x768 and it works before
+login. Keep the `video=` line as well -- it is what forces the connector on at
+all. If the resolution still resets, check `~/.config/autostart/` for a
+`.desktop` file running `xrandr`, which Screen Configuration leaves behind.
+
+**Remote access, and why the session type decides it.** TeamViewer's Linux host
+is X11-only, so the switch above is what makes it work. Raspberry Pi Connect is
+the mirror image: its remote *shell* works anywhere, but its screen *sharing*
+needs Wayland, so it cannot watch a session this agent can drive. Pick the
+viewer that matches. TeamViewer's clipboard sync can also race the paste path in
+`type_text` -- write, paste, restore -- and make Claude paste the wrong thing;
+turn the sync off while the agent runs if you see that.
+
+**Resolution is a cost decision.** At 2560 wide a `--full-screen` shot lands just
+under `MAX_EDGE` and nothing downscales, so you send the model's largest image
+every step. Window capture, the default, mostly sidesteps this. If the Pi exists
+mainly to run the agent, `video=HDMI-A-1:1920x1080M@60D` is the better setting.
 
 Then, on either platform:
 
