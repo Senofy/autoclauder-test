@@ -506,9 +506,16 @@ Three spaces:
 
 | space | what it is |
 |---|---|
-| native | what `screencapture` produces |
-| model | the downscaled image Claude sees — long edge capped at 2576px |
-| logical | macOS points, what the window server accepts |
+| native | what the platform's grab produces |
+| model | the downscaled image Claude sees — see the two limits below |
+| logical | OS points, what the window server accepts |
+
+**Two image limits, and a picture can pass one while failing the other.** The
+long edge must be at most 2576px, *and* the whole image must fit in 4784 image
+tokens — roughly area ÷ 750, about 3.59 megapixels. A 2690×1855 window scaled to
+fit the edge rule is still 4.6MP and is rejected outright with a 400. `_fit`
+applies both, and floors rather than rounds: a scale factor derived from an area
+can land a pixel over the ceiling, and the API does not round in your favour.
 
 Claude answers in **model** space. `Desktop._frame` converts model → logical and
 is recomputed on every full screenshot: `scale` for the downscale and the Retina
@@ -575,7 +582,7 @@ are the supported path.
 cd tests && python3 harness.py
 ```
 
-193 assertions, no API key and no attached display required — on any of the
+214 assertions, no API key and no attached display required — on any of the
 three platforms. `fakes.py` describes one imaginary desktop three times, as
 Quartz reports it, as X11 does, and as `EnumWindows` does, and the suite holds
 all three backends to the same crop, the same label and the same coordinates.
