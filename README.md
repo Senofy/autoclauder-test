@@ -598,7 +598,7 @@ are the supported path.
 cd tests && python3 harness.py
 ```
 
-226 assertions, no API key and no attached display required — on any of the
+224 assertions, no API key and no attached display required — on any of the
 three platforms. `fakes.py` describes one imaginary desktop three times, as
 Quartz reports it, as X11 does, and as `EnumWindows` does, and the suite holds
 all three backends to the same crop, the same label and the same coordinates.
